@@ -21,3 +21,7 @@ endif
 endif
 
 obj-$(CONFIG_OF_UNITTEST) += unittest-data/
+
+
+#ccflags-y := -DDEBUG
+#CFLAGS_REMOVE_irq.o = -DDEBUG

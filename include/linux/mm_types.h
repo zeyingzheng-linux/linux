@@ -86,6 +86,7 @@ struct page {
 			struct list_head lru;
 			/* See page-flags.h for PAGE_MAPPING_FLAGS */
 			struct address_space *mapping;
+			/* 放MIGRATE类型 */
 			pgoff_t index;		/* Our offset within mapping. */
 			/**
 			 * @private: Mapping-private opaque data.
@@ -93,6 +94,7 @@ struct page {
 			 * Used for swp_entry_t if PageSwapCache.
 			 * Indicates order in the buddy system if PageBuddy.
 			 */
+			/* 第一个页描述符会放order */
 			unsigned long private;
 		};
 		struct {	/* page_pool used by netstack */
@@ -198,6 +200,7 @@ struct page {
 		 * If the page can be mapped to userspace, encodes the number
 		 * of times this page is referenced by a page table.
 		 */
+		/* 用于标记page是否在buddy中，设置成-1或者PAGE_BUDDY_MAPCOUNT_VALUE(-128)，在buddy */
 		atomic_t _mapcount;
 
 		/*
@@ -213,6 +216,7 @@ struct page {
 	};
 
 	/* Usage count. *DO NOT USE DIRECTLY*. See page_ref.h */
+	/* 没有用户使用时为0，有使用的话就增加 */
 	atomic_t _refcount;
 
 #ifdef CONFIG_MEMCG

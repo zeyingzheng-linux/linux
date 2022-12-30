@@ -831,6 +831,7 @@ static inline void clear_page_guard(struct zone *zone, struct page *page,
 }
 #else
 static inline bool set_page_guard(struct zone *zone, struct page *page,
+
 			unsigned int order, int migratetype) { return false; }
 static inline void clear_page_guard(struct zone *zone, struct page *page,
 				unsigned int order, int migratetype) {}
@@ -1108,6 +1109,11 @@ continue_merging:
 			return;
 		}
 		buddy_pfn = __find_buddy_pfn(pfn, order);
+		/* 这个减法与下面一样，充分考虑了32/64 bit机器的性质与溢出，真牛逼 
+		 * 假设我们在64位机器下，如果pfn = 0，buddy_pfn = 1，page = 0x10
+		 * 最后结果就是 0x08，因为溢出了是 0xffff_ffff_ffff_ffff，指针也是
+		 * 这么个范围的数目，一相加就是结果了，不能用unsigned int，32位机器
+		 * 才可以用unsngned int，我理解*/
 		buddy = page + (buddy_pfn - pfn);
 
 		if (!page_is_buddy(page, buddy, order))
@@ -2326,6 +2332,7 @@ static inline void expand(struct zone *zone, struct page *page,
 		if (set_page_guard(zone, &page[size], high, migratetype))
 			continue;
 
+		/* 高地址那一块放入空闲，低地址那块拿走 */
 		add_to_free_list(&page[size], zone, high, migratetype);
 		set_buddy_order(&page[size], high);
 	}
@@ -2348,6 +2355,7 @@ static void check_new_page_bad(struct page *page)
  */
 static inline int check_new_page(struct page *page)
 {
+	/* _mapcount = -1，mapping = NULL，_refcount= 0，PAGE_FLAGS_CHECK_AT_PREP 被清除才算正常的 */
 	if (likely(page_expected_state(page,
 				PAGE_FLAGS_CHECK_AT_PREP|__PG_HWPOISON)))
 		return 0;
@@ -2393,6 +2401,7 @@ static inline bool check_new_pcp(struct page *page)
 }
 #endif /* CONFIG_DEBUG_VM */
 
+/* 返回true说明页面检查不过，所有页面都检查 */
 static bool check_new_pages(struct page *page, unsigned int order)
 {
 	int i;
@@ -2536,6 +2545,7 @@ static int move_freepages(struct zone *zone,
 	for (pfn = start_pfn; pfn <= end_pfn;) {
 		page = pfn_to_page(pfn);
 		if (!PageBuddy(page)) {
+			/* 已经被分配走的就不算在buddy了，所以这里就是已经被分配走的case */
 			/*
 			 * We assume that pages that could be isolated for
 			 * migration are movable. But we don't actually try
@@ -2738,6 +2748,8 @@ static void steal_suitable_fallback(struct zone *zone, struct page *page,
 	 * If a sufficient number of pages in the block are either free or of
 	 * comparable migratability as our allocation, claim the whole block.
 	 */
+	/* 以后释放的时候，用调用get_pfnblock_migratetype去拿到迁移类型，最后释放到
+	 * 对应的迁移类型上面去了，反正设置迁移类型的单位就是pageblock，链表是另一回事 */
 	if (free_pages + alike_pages >= (1 << (pageblock_order-1)) ||
 			page_group_by_mobility_disabled)
 		set_pageblock_migratetype(page, start_type);
@@ -3017,11 +3029,14 @@ __rmqueue(struct zone *zone, unsigned int order, int migratetype,
 		}
 	}
 retry:
+	/* 先自己从空闲链表找，如果找不到了后面再从备选的借用 */
 	page = __rmqueue_smallest(zone, order, migratetype);
 	if (unlikely(!page)) {
+		/* 如果调用者允许从CMA分配，那么从CMA借用 */
 		if (alloc_flags & ALLOC_CMA)
 			page = __rmqueue_cma_fallback(zone, order);
 
+		/* 借用备选迁移类型的链表 */
 		if (!page && __rmqueue_fallback(zone, order, migratetype,
 								alloc_flags))
 			goto retry;
@@ -3437,6 +3452,7 @@ void free_unref_page(struct page *page, unsigned int order)
 		migratetype = MIGRATE_MOVABLE;
 	}
 
+	/* 因为中断过程可能会出发另一个页面分配，从而扰乱了本地CPU的PCP链表结构 */
 	local_lock_irqsave(&pagesets.lock, flags);
 	free_unref_page_commit(page, pfn, migratetype, order);
 	local_unlock_irqrestore(&pagesets.lock, flags);
@@ -3705,6 +3721,8 @@ struct page *rmqueue(struct zone *preferred_zone,
 	unsigned long flags;
 	struct page *page;
 
+	/* pcp是per cpu page的意思，里面暂时存放了一小部分单个的物理页面。当系统需要单个物理页面
+	 *的时候，从本地CPU的per-cpu变量的链表中直接获取物理页面即可，这样效率高，不用zone锁 */
 	if (likely(pcp_allowed_order(order))) {
 		/*
 		 * MIGRATE_MOVABLE pcplist could have the pages on CMA area and
@@ -3733,6 +3751,7 @@ struct page *rmqueue(struct zone *preferred_zone,
 		 * reserved for high-order atomic allocation, so order-0
 		 * request should skip it.
 		 */
+		/* 如果调用者要求更努力分配，那么先从高阶原子类型分配页面 */
 		if (order > 0 && alloc_flags & ALLOC_HARDER) {
 			page = __rmqueue_smallest(zone, order, MIGRATE_HIGHATOMIC);
 			if (page)
@@ -3744,6 +3763,7 @@ struct page *rmqueue(struct zone *preferred_zone,
 	if (!page)
 		goto failed;
 
+	/* 分配完需要更新zone的NR_FREE_PAGES */
 	__mod_zone_freepage_state(zone, -(1 << order),
 				  get_pcppage_migratetype(page));
 	spin_unlock_irqrestore(&zone->lock, flags);
@@ -3753,6 +3773,8 @@ struct page *rmqueue(struct zone *preferred_zone,
 
 out:
 	/* Separate test+clear to avoid unnecessary atomics */
+	/* 当页面分配器向备用空闲链表借用内存时，说明有外碎片化倾向，这个标志位在那时候被设置了。
+	 * 此时就清除这个标志位，然后唤醒kswapd线程进行内存回收 */
 	if (test_bit(ZONE_BOOSTED_WATERMARK, &zone->flags)) {
 		clear_bit(ZONE_BOOSTED_WATERMARK, &zone->flags);
 		wakeup_kswapd(zone, 0, 0, zone_idx(zone));
@@ -3856,6 +3878,7 @@ static inline long __zone_watermark_unusable_free(struct zone *z,
 
 #ifdef CONFIG_CMA
 	/* If allocation can't use CMA areas don't use free CMA pages */
+	/* 如果不允许从CMA迁移类型分配，那么不要使用空闲的CMA页，所以就会减去 */
 	if (!(alloc_flags & ALLOC_CMA))
 		unusable_free += zone_page_state(z, NR_FREE_CMA_PAGES);
 #endif
@@ -3909,6 +3932,8 @@ bool __zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 		return true;
 
 	/* For a high-order request, check at least one suitable page is free */
+	/* MIGRATE_UNMOVABLE - MIGRATE_RECLAIMABLE几个迁移类型的空闲页面链表由满足
+	 * order需求的内存块，我们就初步认为满足分配需求，可以rmqueue了 */
 	for (o = order; o < MAX_ORDER; o++) {
 		struct free_area *area = &z->free_area[o];
 		int mt;
@@ -3940,6 +3965,9 @@ bool zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 					zone_page_state(z, NR_FREE_PAGES));
 }
 
+/* 用于判断当前zone的空闲页面是否满足指定水位。另外，还会根据order来判断是否由
+ * 足够大的空闲内存块。若函数返回true，表示zone的页面高于指定水位或者满足order
+ * 需求 */
 static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
 				unsigned long mark, int highest_zoneidx,
 				unsigned int alloc_flags, gfp_t gfp_mask)
@@ -3961,6 +3989,9 @@ static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
 
 		/* reserved may over estimate high-atomic reserves. */
 		usable_free -= min(usable_free, reserved);
+		/* 针对分配一个页面的情况做快速处理，每个zone的lowmem_reserve
+		 * 是预留的内存，为了防止高端zone在没内存的情况下过度借用
+		 * 低端zone的内存资源 */
 		if (usable_free > mark + z->lowmem_reserve[highest_zoneidx])
 			return true;
 	}
@@ -4017,6 +4048,13 @@ static bool zone_allows_reclaim(struct zone *local_zone, struct zone *zone)
  * probably too small. It only makes sense to spread allocations to avoid
  * fragmentation between the Normal and DMA32 zones.
  */
+/*
+ * 使用ZONE_DMA32作为一个合适的zone来避免碎片化其实是微妙的，如果首选的zone是高端
+ * zone，如ZONE_NORMAL，过早的使用低端zone而造成的内存短缺问题比内存碎片化更严重。
+ * 当发生外碎片化时，尽可能的从ZONE_NORMAL的其他迁移类型的空闲链表中多挪用一些空闲
+ * 内存，这比过早的使用低端zone的内存要好很多。理想的情况下，从其他迁移类型的空闲
+ * 链表至少挪用2^pageblock_order个空闲页面，见__rmqueue_fallback();
+ * */
 static inline unsigned int
 alloc_flags_nofragment(struct zone *zone, gfp_t gfp_mask)
 {
@@ -4080,11 +4118,14 @@ retry:
 	 */
 	no_fallback = alloc_flags & ALLOC_NOFRAGMENT;
 	z = ac->preferred_zoneref;
+	/* 从首选的zone，由高到低扫下去，因为build_zonelists就是这么初始化的 */
 	for_next_zone_zonelist_nodemask(zone, z, ac->highest_zoneidx,
 					ac->nodemask) {
 		struct page *page;
 		unsigned long mark;
 
+		/* 如果编译了cpuset功能，且调用者设置了ALLOC_CPUSET要求使用cpuset，并且cpuset
+		 * 不允许当前进程从这个内存节点分配页面，那么不能从这个区域分配页 */
 		if (cpusets_enabled() &&
 			(alloc_flags & ALLOC_CPUSET) &&
 			!__cpuset_zone_allowed(zone, gfp_mask))
@@ -4108,6 +4149,9 @@ retry:
 		 * will require awareness of nodes in the
 		 * dirty-throttling and the flusher threads.
 		 */
+		/* 如果调用者设置标志__GFP_WRITE表示文件系统申请分配一个页缓存页用于写文件，那么
+		 * 检查内存节点的脏页数量是否超过限制，如果超过限制，则不能从这个区域分配页，
+		 * 意思不就是脏页传播到各个内存节点的意思嘛，平均一下嘛 */
 		if (ac->spread_dirty_pages) {
 			if (last_pgdat_dirty_limit == zone->zone_pgdat)
 				continue;
@@ -4118,6 +4162,8 @@ retry:
 			}
 		}
 
+		/* 这是NUMA一个特殊情况，当分配内存的zone不在本地内存节点而是在远端节点时，
+		 * 要考虑的不是内存碎片化，而是内存的本地性，因为访问本地要比访问远端快得多 */
 		if (no_fallback && nr_online_nodes > 1 &&
 		    zone != ac->preferred_zoneref->zone) {
 			int local_nid;
@@ -4134,10 +4180,18 @@ retry:
 			}
 		}
 
+		/* 这里是LOW水位，因为默认值就是LOW水位 */
 		mark = wmark_pages(zone, alloc_flags & ALLOC_WMARK_MASK);
+		/* zone_watermark_ok判断成功，分配也可能失败，一方面可能是外碎片化严重
+		 * 另一个方面可能是无法借用其他迁移类型的内存 */
 		if (!zone_watermark_fast(zone, order, mark,
 				       ac->highest_zoneidx, alloc_flags,
 				       gfp_mask)) {
+			/* 以下处理当前的zone不满足内存分配需求的情况。
+			 * 1. 如果node_reclaim_enabled打开：直接从本地zone进行内存回收
+			 * 2. 如果node_reclaim_enabled关闭：可以从下一个zone或者内存节点分配了
+			 * 默认一般是关闭的状态，至少我现在注释的平台node_reclaim都没实现
+			 * */
 			int ret;
 
 #ifdef CONFIG_DEFERRED_STRUCT_PAGE_INIT
@@ -4152,13 +4206,19 @@ retry:
 #endif
 			/* Checked here to keep the fast path fast */
 			BUILD_BUG_ON(ALLOC_NO_WATERMARKS < NR_WMARK);
+			/* 如果调用者要求不检查水线，那么可以从这个区域分配页
+			 * zzy:查一下谁来设置这个标志 */
 			if (alloc_flags & ALLOC_NO_WATERMARKS)
 				goto try_this_zone;
 
+			/* 没有开启节点回收功能，或者当前节点和首选节点之间的距离大于回收距离
+			 * 那么不能从这个区域分配页 */
 			if (!node_reclaim_enabled() ||
 			    !zone_allows_reclaim(ac->preferred_zoneref->zone, zone))
 				continue;
 
+			/* 从节点回收没有映射到进程虚拟地址空间的文件页和slab分配器申请的页
+			 * 然后重新检查水仙，如果还是不满足，那么不能从这个区域分配页 */
 			ret = node_reclaim(zone->zone_pgdat, gfp_mask, order);
 			switch (ret) {
 			case NODE_RECLAIM_NOSCAN:
@@ -4178,15 +4238,19 @@ retry:
 		}
 
 try_this_zone:
+		/* 从当前区域分配页 */
 		page = rmqueue(ac->preferred_zoneref->zone, zone, order,
 				gfp_mask, alloc_flags, ac->migratetype);
 		if (page) {
+			/* 拿到的Page要做一些初始化工作，_refcount统计数为1，private为0 */
 			prep_new_page(page, order, gfp_mask, alloc_flags);
 
 			/*
 			 * If this is a high-order atomic allocation then check
 			 * if the pageblock should be reserved for the future
 			 */
+			/* 如果是高阶原子分配且区域中高阶原子类型的页数没有超过限制，
+			 * 那么把分配的页所属的页块转换成高阶原子类型 */
 			if (unlikely(order && (alloc_flags & ALLOC_HARDER)))
 				reserve_highatomic_pageblock(page, zone, order);
 
@@ -4206,6 +4270,8 @@ try_this_zone:
 	 * It's possible on a UMA machine to get through all zones that are
 	 * fragmented. If avoiding fragmentation, reset and try again.
 	 */
+	/* 当遍历完所有的zone之后，还没有成功分配处所需要的内存，最有可能的情况就是
+	 * 系统产生了外碎片化，这时可以重新尝试一次*/
 	if (no_fallback) {
 		alloc_flags &= ~ALLOC_NOFRAGMENT;
 		goto retry;
@@ -5409,6 +5475,7 @@ struct page *__alloc_pages(gfp_t gfp, unsigned int order, int preferred_nid,
 							nodemask_t *nodemask)
 {
 	struct page *page;
+	/* 这个默认值的意思是，默认允许分配内存的判断条件为低水位 */
 	unsigned int alloc_flags = ALLOC_WMARK_LOW;
 	gfp_t alloc_gfp; /* The gfp_t that was actually used for allocation */
 	struct alloc_context ac = { };
@@ -5417,6 +5484,7 @@ struct page *__alloc_pages(gfp_t gfp, unsigned int order, int preferred_nid,
 	 * There are several places where we assume that the order value is sane
 	 * so bail out early if the request is out of bound.
 	 */
+	/* buddy系统能分配最大内存快就是2^(MAX_ORDER-1)，假设为11，那么就是4M的大小 */
 	if (unlikely(order >= MAX_ORDER)) {
 		WARN_ON_ONCE(!(gfp & __GFP_NOWARN));
 		return NULL;
@@ -5430,8 +5498,13 @@ struct page *__alloc_pages(gfp_t gfp, unsigned int order, int preferred_nid,
 	 * memalloc_no{fs,io}_{save,restore}. And PF_MEMALLOC_PIN which ensures
 	 * movable zones are not used during allocation.
 	 */
+	/* memalloc_noio_save这种接口会mark current->flag的标志，从而影响到该进程的分配标志 */
 	gfp = current_gfp_context(gfp);
 	alloc_gfp = gfp;
+	/*
+	 * 计算相关信息保存到ac这个临时结构体中，如highest_zoneidx,migratetype,zonelist等，也
+	 * 干预了其他两个flag，最后确定首选的preferred_zoneref
+	 */
 	if (!prepare_alloc_pages(gfp, order, preferred_nid, nodemask, &ac,
 			&alloc_gfp, &alloc_flags))
 		return NULL;
@@ -5440,6 +5513,7 @@ struct page *__alloc_pages(gfp_t gfp, unsigned int order, int preferred_nid,
 	 * Forbid the first pass from falling back to types that fragment
 	 * memory until all local zones are considered.
 	 */
+	/* 新增的一个内存碎片化的优化标志 */
 	alloc_flags |= alloc_flags_nofragment(ac.preferred_zoneref->zone, gfp);
 
 	/* First allocation attempt */
@@ -7490,6 +7564,7 @@ static void __meminit pgdat_init_internals(struct pglist_data *pgdat)
 static void __meminit zone_init_internals(struct zone *zone, enum zone_type idx, int nid,
 							unsigned long remaining_pages)
 {
+	/* 后面在free页面给buddy之前，managed_pages会被清零，见memblock_free_all */
 	atomic_long_set(&zone->managed_pages, remaining_pages);
 	zone_set_nid(zone, nid);
 	zone->name = zone_names[idx];

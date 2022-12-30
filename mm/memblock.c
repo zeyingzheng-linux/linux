@@ -719,6 +719,11 @@ int __init_memblock memblock_add(phys_addr_t base, phys_addr_t size)
  * Return:
  * 0 on success, -errno on failure.
  */
+/*
+ * 输出参数中：
+ * start_rgn是指向是包含本身的
+ * end_rgn是指向下一个的，即不包含本身
+ */
 static int __init_memblock memblock_isolate_range(struct memblock_type *type,
 					phys_addr_t base, phys_addr_t size,
 					int *start_rgn, int *end_rgn)
@@ -2072,7 +2077,7 @@ static unsigned long __init free_low_memory_core_early(void)
 	 *  because in some case like Node0 doesn't have RAM installed
 	 *  low ram will be on Node1
 	 */
-	/* 将memblock.memory的内存释放给伙伴系统 */
+	/* 将memblock.memory中，但不在memblockk.reserve里面的内存释放给伙伴系统 */
 	for_each_free_mem_range(i, NUMA_NO_NODE, MEMBLOCK_NONE, &start, &end,
 				NULL)
 		count += __free_memory_core(start, end);

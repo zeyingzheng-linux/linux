@@ -174,6 +174,9 @@ struct alloc_context {
  *
  * Assumption: *_mem_map is contiguous at least up to MAX_ORDER
  */
+/* 1 << order 那一位如果是1，那么ret = page_fpn - order_size
+ * 1 << order 那一位如果是0，那么ret = page_fpn + order_size
+ * */
 static inline unsigned long
 __find_buddy_pfn(unsigned long page_pfn, unsigned int order)
 {

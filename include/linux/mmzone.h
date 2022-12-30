@@ -40,10 +40,14 @@
 #define PAGE_ALLOC_COSTLY_ORDER 3
 
 enum migratetype {
+	/* 无法移动和检索的类型，用于内核分配的页面，I/O缓冲区，内核堆栈等 */
 	MIGRATE_UNMOVABLE,
+	/* 当需要大的连续内存时，通过移动当前使用的页面来尽可能防止碎片，用于分配用户内存*/
 	MIGRATE_MOVABLE,
+	/* 当没有可用内存时使用此类型 */
 	MIGRATE_RECLAIMABLE,
 	MIGRATE_PCPTYPES,	/* the number of types on the pcp lists */
+	/* 减少原子分配请求无法进行高阶页面分配的可能，内核会提前准备一个页面块 */
 	MIGRATE_HIGHATOMIC = MIGRATE_PCPTYPES,
 #ifdef CONFIG_CMA
 	/*
@@ -59,9 +63,11 @@ enum migratetype {
 	 * MAX_ORDER_NR_PAGES should biggest page be bigger than
 	 * a single pageblock.
 	 */
+	/* 页面类型由CMA内存分配器单独管理 */
 	MIGRATE_CMA,
 #endif
 #ifdef CONFIG_MEMORY_ISOLATION
+	/* 内核会暂时更改为这种类型，以迁移使用中的系列活动页面 */
 	MIGRATE_ISOLATE,	/* can't allocate from here */
 #endif
 	MIGRATE_TYPES
@@ -354,11 +360,20 @@ enum zone_watermarks {
 #define min_wmark_pages(z) (z->_watermark[WMARK_MIN] + z->watermark_boost)
 #define low_wmark_pages(z) (z->_watermark[WMARK_LOW] + z->watermark_boost)
 #define high_wmark_pages(z) (z->_watermark[WMARK_HIGH] + z->watermark_boost)
+/* watermark_boost是5.0内核实现的一个临时增加水位的功能。
+ * 外碎片化是指系统有足够的的空闲内存，但是没办法分配出想要的内存块。这是因为
+ * 有很多空闲内存分散在众多的页块中，导致没法分配出一个完整和连续的大内存块。
+ * 那么如何检查外碎片化呢，Linux内核在分配物理页面时，若发现没有办法分配出
+ * 想要的物理内存，特别是大内存块，那么它会去其他迁移类型中挪用内存(__rmqueue_fallback)
+ * 于是我们就认为由发生外碎片化的倾向。这个临时增加水位的优化方法是，当检查到
+ * 由外碎片化倾向时，就临时提高水位，这样可以提前出发kswapd内核线程回收内存，
+ * 然后出发kcompactd内核线程做内存规整，这样由主语快速满足分配大内存块的需求 */
 #define wmark_pages(z, i) (z->_watermark[i] + z->watermark_boost)
 
 /* Fields and list protected by pagesets local_lock in page_alloc.c */
 struct per_cpu_pages {
 	int count;		/* number of pages in the list */
+	/* 高于此水位，则回收页面回伙伴系统，回收单位是batch */
 	int high;		/* high watermark, emptying needed */
 	int batch;		/* chunk size for buddy add/remove */
 	short free_factor;	/* batch scaling factor during free */
@@ -491,6 +506,7 @@ struct zone {
 	/* Read-mostly fields */
 
 	/* zone watermarks, access with *_wmark_pages(zone) macros */
+	/* 页面分配器和kswapd页面回收会用到 */
 	unsigned long _watermark[NR_WMARK];
 	unsigned long watermark_boost;
 
@@ -579,6 +595,7 @@ struct zone {
 	 * mem_hotplug_begin/end(). Any reader who can't tolerant drift of
 	 * present_pages should get_online_mems() to get a stable value.
 	 */
+	/* zone 中被伙伴系统管理的页面数量 */
 	atomic_long_t		managed_pages;
 	unsigned long		spanned_pages;
 	unsigned long		present_pages;
@@ -769,14 +786,14 @@ static inline bool zone_intersects(struct zone *zone,
  *
  */
 enum {
-        /* 包含所有内存节点的备用区域列表 */
+        /* 包含所有内存节点的备用区域列表。指向本地的zone，即包含备选的zone */
 	ZONELIST_FALLBACK,	/* zonelist with fallback */
 #ifdef CONFIG_NUMA
 	/*
 	 * The NUMA zonelists are doubled because we need zonelists that
 	 * restrict the allocations to a single node for __GFP_THISNODE.
 	 */
-	/* 只包含当前内存节点的备用区域列表，需要申请页时指定__GFP_THISNODE */
+	/* 只包含当前内存节点的备用区域列表，需要申请页时指定__GFP_THISNODE。指向远端节点的zone */
 	ZONELIST_NOFALLBACK,	/* zonelist without fallback (__GFP_THISNODE) */
 #endif
 	MAX_ZONELISTS
@@ -875,8 +892,10 @@ typedef struct pglist_data {
 	unsigned long node_spanned_pages; /* total size of physical page
 					     range, including holes */
 	int node_id;
+	/* 页面回收进程使用的等待队列 */
 	wait_queue_head_t kswapd_wait;
 	wait_queue_head_t pfmemalloc_wait;
+	/* 页面回收进程 */
 	struct task_struct *kswapd;	/* Protected by
 					   mem_hotplug_begin/end() */
 	int kswapd_order;

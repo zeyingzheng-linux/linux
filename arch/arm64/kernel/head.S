@@ -484,14 +484,16 @@ SYM_FUNC_END(__create_page_tables)
  *   x0 = __PHYS_OFFSET
  */
 SYM_FUNC_START_LOCAL(__primary_switched)
-        /* 存储在内核映像的data段里面 */
+        /* init_task是一个task_struct，存储在内核映像的data段里面 */
 	adr_l	x4, init_task
 	/* 指向了第一个进程(init进程)的内核栈，THREAD_SIZE表示内核栈的大小 */
 	/*
 	 * 在linux5.0内核中，获取当前进程描述符的task_struct的方法发生了变化。在内核态，ARM64处理器运行在EL1上，sp_el0
 	 * 寄存器在EL1上下文是没用的，所以直接利用它来存放task_struct的指针是一个简洁而快速的办法。
 	 * init/init_task.c 在内核中是静态初始化的
-	 * 指向了第一个进程(init进程)的内核栈，THREAD_SIZE表示内核栈的大小
+	 *
+	 * sp_el0指向了第一个进程的task_struct
+	 * sp_el1指向了第一个进程(init进程)的内核栈，THREAD_SIZE表示内核栈的大小
 	 */
 	init_cpu_task x4, x5, x6
         /* vectors 定义在 arch/arm64/kernel/entry.S */

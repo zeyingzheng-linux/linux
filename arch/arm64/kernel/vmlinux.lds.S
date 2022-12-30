@@ -143,7 +143,7 @@ SECTIONS
 	/* 5.0内核是 . = KIMAGE_VADDR + TEXT_OFFSET;
 	 * KIMAGE_VADDR 宏表示内核镜像的虚拟起始地址(0xFFFF 0000 1000 0000) 定义在 arch/arm64/include/asm/memory.h
 	 * TEXT_OFFSET  宏表示内核镜像的代码段在内存中的偏移量(0x8 0000)，定义在 arch/arm64/Makefile,5.15 内核已经看不它了
-	 * PAGE_OFFSET  宏就是线性偏移 (0xFFFF 8000 0000 0000)
+	 * PAGE_OFFSET  宏就是线性偏移 (0xFFFF 8000 0000 0000)，在5.15定义已经变了
 	 * .head.text 定义成在 include/linux/init.h 里面，即__HEAD，可以找到在 arch/arm64/kernel/head.S 里面有 __HEAD 段开始的代码，即内核开始代码
 	 * 代码段: _stext -- _etext --> 存放内核的代码段
 	 * 只读数据段: __start_rodata -- __init_begin --> 存放只读数据段，包括PGD页表swapper_pg_dir，为软件PAN功能准备的特殊页表 reserved_ttbr0
@@ -196,6 +196,7 @@ SECTIONS
 
 	HYPERVISOR_DATA_SECTIONS
 
+	/* 给内核恒等映射用的，head.S */
 	idmap_pg_dir = .;
 	. += IDMAP_DIR_SIZE;
 	idmap_pg_end = .;
@@ -208,6 +209,9 @@ SECTIONS
 	reserved_pg_dir = .;
 	. += PAGE_SIZE;
 
+	/* pagging_init，做内核镜像映射和物理内存的线性映射
+	 * 多级页表是分配出来的，除了L0是PAGE_SIZE直接拿
+	 */
 	swapper_pg_dir = .;
 	. += PAGE_SIZE;
 
@@ -299,6 +303,7 @@ SECTIONS
 
 	BSS_SECTION(SBSS_ALIGN, 0, 0)
 
+	/* 给内核镜像映射用的，head.S */
 	. = ALIGN(PAGE_SIZE);
 	init_pg_dir = .;
 	. += INIT_DIR_SIZE;

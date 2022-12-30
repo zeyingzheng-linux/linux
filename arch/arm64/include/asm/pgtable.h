@@ -92,10 +92,14 @@ static inline pteval_t __phys_to_pte_val(phys_addr_t phys)
 /*
  * The following only work if pte_present(). Undefined behaviour otherwise.
  */
+/* 判断该页是否在内存中 */
 #define pte_present(pte)	(!!(pte_val(pte) & (PTE_VALID | PTE_PROT_NONE)))
+/* 判断该页是否被访问过 */
 #define pte_young(pte)		(!!(pte_val(pte) & PTE_AF))
 #define pte_special(pte)	(!!(pte_val(pte) & PTE_SPECIAL))
+/* 判断该页是否具有可写属性 */
 #define pte_write(pte)		(!!(pte_val(pte) & PTE_WRITE))
+/* 表示该页面属于用户态映射的页面，可调用__sync_icache_dcache来进行高速缓存的一致性操作 */
 #define pte_user_exec(pte)	(!(pte_val(pte) & PTE_UXN))
 #define pte_cont(pte)		(!!(pte_val(pte) & PTE_CONT))
 #define pte_devmap(pte)		(!!(pte_val(pte) & PTE_DEVMAP))
@@ -114,12 +118,17 @@ static inline pteval_t __phys_to_pte_val(phys_addr_t phys)
 
 #define pte_hw_dirty(pte)	(pte_write(pte) && !(pte_val(pte) & PTE_RDONLY))
 #define pte_sw_dirty(pte)	(!!(pte_val(pte) & PTE_DIRTY))
+/* 判断该页是否被写入过 */
 #define pte_dirty(pte)		(pte_sw_dirty(pte) || pte_hw_dirty(pte))
 
 #define pte_valid(pte)		(!!(pte_val(pte) & PTE_VALID))
 /*
  * Execute-only user mappings do not have the PTE_USER bit set. All valid
  * kernel mappings have the PTE_UXN bit set.
+ */
+/*
+ * 表示该页面不能在用户态访问，即该页面属于内核态，当它被写入硬件页表后，需要调用
+ * dsb()来保证页表更新完成。
  */
 #define pte_valid_not_user(pte) \
 	((pte_val(pte) & (PTE_VALID | PTE_USER | PTE_UXN)) == (PTE_VALID | PTE_UXN))

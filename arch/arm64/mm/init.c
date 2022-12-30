@@ -174,12 +174,22 @@ static void __init zone_sizes_init(unsigned long min, unsigned long max)
 	arm64_dma_phys_limit = max_zone_phys(zone_dma_bits);
 	max_zone_pfns[ZONE_DMA] = PFN_DOWN(arm64_dma_phys_limit);
 #endif
+	pr_debug("acpi_zone_dma_bits = %d\n", acpi_zone_dma_bits);
+	pr_debug("dt_zone_dma_bits = %d\n", dt_zone_dma_bits);
+	pr_debug("zone_dma_bits = %d\n", zone_dma_bits);
+	pr_debug("arm64_dma_phys_limit = %#018Lx\n", arm64_dma_phys_limit);
+
 #ifdef CONFIG_ZONE_DMA32
 	max_zone_pfns[ZONE_DMA32] = PFN_DOWN(dma32_phys_limit);
 	if (!arm64_dma_phys_limit)
 		arm64_dma_phys_limit = dma32_phys_limit;
 #endif
 	max_zone_pfns[ZONE_NORMAL] = max;
+
+	pr_debug("max_zone_pfns[ZONE_DMA] = %#018lx\n", max_zone_pfns[ZONE_DMA]);
+	pr_debug("max_zone_pfns[ZONE_DMA32] = %#018lx\n", max_zone_pfns[ZONE_DMA32]);
+	pr_debug("max_zone_pfns[ZONE_NORMAL] = %#018lx\n", max_zone_pfns[ZONE_NORMAL]);
+	pr_debug("arm64_dma_phys_limit = %#018Lx\n", arm64_dma_phys_limit);
 
 	free_area_init(max_zone_pfns);
 }
@@ -216,9 +226,9 @@ early_param("mem", early_mem);
 void __init arm64_memblock_init(void)
 {
         /*
-	 * -(s64)PAGE_OFFSET其实就代表了 0xFFFF_8000_0000_0000 - 0xFFFF_FFFF_FFFF_FFFF       的大小，思考 -2的补码表示就知道了
 	 * zzy: const s64 linear_region_size = -(s64)PAGE_OFFSET;
-	 * "linux,usable-memory-range"属性表示可用内存的范围，我们把超出这个范围的物理内存直接从memblock.memory删除
+	 * 5.0: -(s64)PAGE_OFFSET其实就代表了 0xFFFF_8000_0000_0000 ~ 0xFFFF_FFFF_FFFF_FFFF的大小，思考 -2的补码表示就知道了
+	 * zzy:"linux,usable-memory-range"属性表示可用内存的范围，我们把超出这个范围的物理内存直接从memblock.memory删除
 	 */
 	s64 linear_region_size = PAGE_END - _PAGE_OFFSET(vabits_actual);
 
@@ -253,7 +263,7 @@ void __init arm64_memblock_init(void)
 	 * linear mapping. Take care not to clip the kernel which may be
 	 * high in memory.
 	 */
-	/* 把线性映射区域不能覆盖的物理内存从memblock.memory中删除，其实这个一般就是空操作吧，毕竟linear map区域有128TB */
+	/* 把线性映射区域不能覆盖的物理内存从memblock.memory中删除*/
 	memblock_remove(max_t(u64, memstart_addr + linear_region_size,
 			__pa_symbol(_end)), ULLONG_MAX);
 	if (memstart_addr + linear_region_size < memblock_end_of_DRAM()) {
@@ -389,6 +399,10 @@ void __init bootmem_init(void)
 	 * done after the fixed reservations
 	 */
 	sparse_init();
+	pr_debug("memblock_start_of_DRAM() = %#018Lx\n", memblock_start_of_DRAM());
+	pr_debug("memblock_end_of_DRAM() = %#018Lx\n", memblock_end_of_DRAM());
+	pr_debug("min_pfn_align = %#018lx\n", min);
+	pr_debug("max_pfn_align = %#018lx\n", max);
 	zone_sizes_init(min, max);
 
 	/*

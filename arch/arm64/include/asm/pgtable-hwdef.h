@@ -23,6 +23,8 @@
  *
  * which gets simplified as :
  */
+
+/* 入参是bit数目，输出是代表了几个level，例如入参是48，出参就是 4（L0 - L3）*/
 #define ARM64_HW_PGTABLE_LEVELS(va_bits) (((va_bits) - 4) / (PAGE_SHIFT - 3))
 
 /*
@@ -38,6 +40,16 @@
  * Rearranging it a bit we get :
  *   (4 - n) * (PAGE_SHIFT - 3) + 3
  */
+
+/* For example, 48bit and 4K granule: n=[0,3], mean L0-L3
+ *                        L0         L1          L2        L3	     PAGE_SHIFT
+ *                    |         ||         ||         |          |
+ *1111 1111 1111 1111 0111 1101 1111 1111 1111 1110 0111 1111 1001 0000 0000 0000
+ *                    |         ||         ||         |          |
+ *                        9bit      9bit       9bit       9bit         12bit
+ */
+
+/* 入参是level,出参是该level可以map的位数，例如入参是3，出参就是PAGE_SHIFT，即L3可以映射12bit的范围 */
 #define ARM64_HW_PGTABLE_LEVEL_SHIFT(n)	((PAGE_SHIFT - 3) * (4 - (n)) + 3)
 
 #define PTRS_PER_PTE		(1 << (PAGE_SHIFT - 3))
@@ -145,15 +157,47 @@
 #define PTE_TYPE_MASK		(_AT(pteval_t, 3) << 0)
 #define PTE_TYPE_PAGE		(_AT(pteval_t, 3) << 0)
 #define PTE_TABLE_BIT		(_AT(pteval_t, 1) << 1)
+/*
+ * AP[1] = 0: 表示不可以通过EL0访问，但更高权限异常等级可以访问
+ * AP[1] = 1: 表示可以通过EL0访问，并且更高权限异常等级可以访问
+ * 所以PTE_USER宏用来表示可以在用户态访问该页面
+ */
 #define PTE_USER		(_AT(pteval_t, 1) << 6)		/* AP[1] */
+/*
+ * AP[2] = 0: 表示可读可写
+ * AP[2] = 1: 表示只读
+ */
 #define PTE_RDONLY		(_AT(pteval_t, 1) << 7)		/* AP[2] */
+/*
+ * 00: 没有共享
+ * 01: 保留
+ * 10: 外部可共享
+ * 11: 内部可共享
+ */
 #define PTE_SHARED		(_AT(pteval_t, 3) << 8)		/* SH[1:0], inner shareable */
+/*
+ * Armv8.0是会产生Access flag fault，然后由软件更新这个bit
+ * Armv8.1是会自动设置这个位，当第一次访问页面时。当然是可以有开关这个功能的
+ */
 #define PTE_AF			(_AT(pteval_t, 1) << 10)	/* Access Flag */
+/*
+ * TLB的页表项分成全局的和进程特有的。当设置该位时表示这个页面对应的TLB页表项是进程特有的
+ */
 #define PTE_NG			(_AT(pteval_t, 1) << 11)	/* nG */
 #define PTE_GP			(_AT(pteval_t, 1) << 50)	/* BTI guarded */
+/*
+ * P2621: Hardware management of dirty state
+ * HD=1,AP[2]=1,DBM=1: 被当成是可写的。因为这时如果写发生，硬件会把AP[2]设置为0，且不会产生异常
+ * HD=0,AP[2]=1,DBM=x: 因为硬件开关关闭，所以此时写发生，将会产生一个Permission fault
+ * HD=1,AP[2]=0,DBM=0: 写进来，理论上应该就是更新DBM=1了
+ * COW（copy on write）应该是HD=1,AP[2]=1,DBM=0的case，要产生异常才对
+ */
 #define PTE_DBM			(_AT(pteval_t, 1) << 51)	/* Dirty Bit Management */
+/* 表示当前页表项处在一个连续物理页面集合中，可使用单个TLB表项进行优化 */
 #define PTE_CONT		(_AT(pteval_t, 1) << 52)	/* Contiguous range */
+/* 特权模式下不能执行，Privileged execute-never */
 #define PTE_PXN			(_AT(pteval_t, 1) << 53)	/* Privileged XN */
+/* 用户空间不能执行，Unprivileged execute-never */
 #define PTE_UXN			(_AT(pteval_t, 1) << 54)	/* User XN */
 
 #define PTE_ADDR_LOW		(((_AT(pteval_t, 1) << (48 - PAGE_SHIFT)) - 1) << PAGE_SHIFT)

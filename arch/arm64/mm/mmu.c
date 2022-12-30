@@ -510,7 +510,7 @@ early_param("crashkernel", enable_crash_mem_map);
 /*
  * 主要是做整片内存的线性映射的，分成了三块。
  * 1. zzy: __PHYS_OFFSET ---> __PHYS_OFFSET + TEXT_OFFSET (PAGE_KERNEL，启用CONT)
- * 2. _text ---> __init_begin(PAGE_KERNEL->PAGE_KERNEL_RO，未启用CONT)，在 mark_linear_text_alias_ro 被设置为只读
+ * 2. _stext ---> __init_begin(PAGE_KERNEL->PAGE_KERNEL_RO，未启用CONT)，在 mark_linear_text_alias_ro 被设置为只读
  * 3. __init_begin ---> 物理内存结束(PAGE_KERNEL，启用CONT)
  */
 static void __init map_mem(pgd_t *pgdp)
@@ -564,8 +564,9 @@ static void __init map_mem(pgd_t *pgdp)
 		if (start >= end)
 			break;
 		/*
-		 * zzy: nomap属性就跳过，不映射了。但/reserved-memory里面的nopmap直接就给挪出memblock.memory了 
-		 * if (memblock_is_nomap(reg))
+		 * zzy: nomap属性就跳过，不映射了，最新内核是在should_skip_region里面干的，即在for_each里面就过滤了。
+		 * 但/reserved-memory里面的nopmap直接就给挪出memblock.memory了 
+		 * if (memblock_is_nomap(reg)) 是5.0内核的做法。
 		 */
 		/*
 		 * The linear map must allow allocation tags reading/writing

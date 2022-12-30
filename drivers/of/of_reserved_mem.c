@@ -280,6 +280,7 @@ void __init fdt_init_reserved_mem(void)
 		if (prop)
 			rmem->phandle = of_read_number(prop, len/4);
 
+		/* 针对前面没有reg属性但是却指定了size的reserved节点，此时size就是0，那么我们给他分配一段物理地址空间，作为reserved */
 		if (rmem->size == 0)
 			err = __reserved_mem_alloc_size(node, rmem->name,
 						 &rmem->base, &rmem->size);

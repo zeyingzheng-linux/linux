@@ -655,7 +655,7 @@ void __init early_init_fdt_scan_reserved_mem(void)
 
         /* 处理节点/reserved-memory 的保留内存，   1. 如果有nomap属性，直接从memblock.memory中删除，就是内核访问不到了 2. 如果没有nommp属性，添加到memblock.reserve中，认为已经被分配 */
 	of_scan_flat_dt(__fdt_scan_reserved_mem, NULL);
-        /* 创建数据结构来管理那些reserve的内存 */
+        /* 调用reserved内存对应的处理函数 */
 	fdt_init_reserved_mem();
 	fdt_reserve_elfcorehdr();
 }

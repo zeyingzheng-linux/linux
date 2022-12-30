@@ -69,9 +69,12 @@ struct vm_area_struct;
  * without the underscores and use them consistently. The definitions here may
  * be used in bit comparisons.
  */
+/* zone modifier */
+/* 从不同的zone分配内存 */
 #define __GFP_DMA	((__force gfp_t)___GFP_DMA)
 #define __GFP_HIGHMEM	((__force gfp_t)___GFP_HIGHMEM)
 #define __GFP_DMA32	((__force gfp_t)___GFP_DMA32)
+/* 既指明从ZONE_MOVABLE分配内存，也可以指明是申请可移动页面 */
 #define __GFP_MOVABLE	((__force gfp_t)___GFP_MOVABLE)  /* ZONE_MOVABLE allowed */
 #define GFP_ZONEMASK	(__GFP_DMA|__GFP_HIGHMEM|__GFP_DMA32|__GFP_MOVABLE)
 
@@ -102,10 +105,20 @@ struct vm_area_struct;
  *
  * %__GFP_ACCOUNT causes the allocation to be accounted to kmemcg.
  */
+/* 移动修饰符:2.6.24内核开始，为了解决外碎片化问题，引入了迁移类型 */
+/* 申请可回收页，在slab分配器中指定了SLAB_RECLAIM_ACCOUNT标志位，表示
+ * slab分配器中使用的页面可以通过收割机来回收 */
 #define __GFP_RECLAIMABLE ((__force gfp_t)___GFP_RECLAIMABLE)
+/* 指明调用者打算写物理页，只要有可能，把这些页分布到本地节点的所有
+ * 区域，避免所有脏页在一个内存区域 */
 #define __GFP_WRITE	((__force gfp_t)___GFP_WRITE)
+/* 实施cpuset内存分配策略。cpuset是cgroup的一个子系统，提供了把处理器
+ * 和内存节点的集合分配给一组进程的机制，即允许进程在哪些处理器上运行
+ * 和从哪些内存节点申请页 */
 #define __GFP_HARDWALL   ((__force gfp_t)___GFP_HARDWALL)
+/* 强制从指定内存节点分配内存，并且没有回退机制 */
 #define __GFP_THISNODE	((__force gfp_t)___GFP_THISNODE)
+/* 把分配的页记账到内核内存控制组，kmemcg */
 #define __GFP_ACCOUNT	((__force gfp_t)___GFP_ACCOUNT)
 
 /**
@@ -135,9 +148,14 @@ struct vm_area_struct;
  * %__GFP_NOMEMALLOC is used to explicitly forbid access to emergency reserves.
  * This takes precedence over the %__GFP_MEMALLOC flag if both are set.
  */
+/* 表示分配过程不能执行页面回收或者睡眠动作，可以使用系统预留的内存 */
 #define __GFP_ATOMIC	((__force gfp_t)___GFP_ATOMIC)
+/* 表示具有高优先级，可以使用系统预留的内存（最低警戒水位线下的预留内存） */
 #define __GFP_HIGH	((__force gfp_t)___GFP_HIGH)
+/* 分配过程中允许访问所有的内存，包括系统预留的内存，分配进程通常要保证
+ * 在分配内存过程中很快就会有内存被释放，如进程退出或者页面回收，征粮队 */
 #define __GFP_MEMALLOC	((__force gfp_t)___GFP_MEMALLOC)
+/* 分配过程禁止访问系统预留的内存 */
 #define __GFP_NOMEMALLOC ((__force gfp_t)___GFP_NOMEMALLOC)
 
 /**
@@ -211,13 +229,23 @@ struct vm_area_struct;
  * loop around allocator.
  * Using this flag for costly allocations is _highly_ discouraged.
  */
+/* 允许开启IO（允许读写存储设备） */
 #define __GFP_IO	((__force gfp_t)___GFP_IO)
+/* 允许向下调用到底层文件系统。当文件系统申请页的时候，如果内存严重不足，直接回收页，把脏页回写
+ * 到存储设备，调用文件系统的函数，可能导致死锁，为了避免死锁，文件系统申请页应该清除这个标志位 */
 #define __GFP_FS	((__force gfp_t)___GFP_FS)
+/* 分配内存过程中允许使用页面直接回收机制 */
 #define __GFP_DIRECT_RECLAIM	((__force gfp_t)___GFP_DIRECT_RECLAIM) /* Caller can reclaim */
+/* 分配，当达到内存管理区的低水位时回唤醒kswapd内核线程，以异步方式回收内存，直到内存管理区恢复
+ * 到高水位为止 */
 #define __GFP_KSWAPD_RECLAIM	((__force gfp_t)___GFP_KSWAPD_RECLAIM) /* kswapd can wake */
+/* 允许直接内存回收和异步回收 */
 #define __GFP_RECLAIM ((__force gfp_t)(___GFP_DIRECT_RECLAIM|___GFP_KSWAPD_RECLAIM))
+/* 允许重试，重试多次以后放弃，分配可能失败 */
 #define __GFP_RETRY_MAYFAIL	((__force gfp_t)___GFP_RETRY_MAYFAIL)
+/* 必须无限次重试，因为调用者经不起失败 */
 #define __GFP_NOFAIL	((__force gfp_t)___GFP_NOFAIL)
+/* 当直接回收和内存碎片整理不能使分配成功的时候，应该放弃 */
 #define __GFP_NORETRY	((__force gfp_t)___GFP_NORETRY)
 
 /**
@@ -240,7 +268,9 @@ struct vm_area_struct;
  * effect in HW tags mode.
  */
 #define __GFP_NOWARN	((__force gfp_t)___GFP_NOWARN)
+/* 把分配的页块组成复合页（compound page） */
 #define __GFP_COMP	((__force gfp_t)___GFP_COMP)
+/* 返回一个全部填充为0的页 */
 #define __GFP_ZERO	((__force gfp_t)___GFP_ZERO)
 #define __GFP_ZEROTAGS	((__force gfp_t)___GFP_ZEROTAGS)
 #define __GFP_SKIP_KASAN_POISON	((__force gfp_t)___GFP_SKIP_KASAN_POISON)
@@ -320,16 +350,24 @@ struct vm_area_struct;
  * version does not attempt reclaim/compaction at all and is by default used
  * in page fault path, while the non-light is used by khugepaged.
  */
+/* 分配内核使用的页，调用者是高优先级的，不能睡眠，允许异步回收页，可能会失败
+ * 可以访问系统预留内存 */
 #define GFP_ATOMIC	(__GFP_HIGH|__GFP_ATOMIC|__GFP_KSWAPD_RECLAIM)
+/* 分配内核使用的页，可能睡眠。从zone_normal或以下分配，允许异步和直接回收页面，
+ * 允许读写IO，允许调用到底层FS */
 #define GFP_KERNEL	(__GFP_RECLAIM | __GFP_IO | __GFP_FS)
 #define GFP_KERNEL_ACCOUNT (GFP_KERNEL | __GFP_ACCOUNT)
+/* 分配中不允许睡眠等待。允许异步回收页，不允许直接回收页，不允许IO、FS */
 #define GFP_NOWAIT	(__GFP_KSWAPD_RECLAIM)
 #define GFP_NOIO	(__GFP_RECLAIM)
 #define GFP_NOFS	(__GFP_RECLAIM | __GFP_IO)
+/* 分配的页面内核或硬件也可以直接使用 */
 #define GFP_USER	(__GFP_RECLAIM | __GFP_IO | __GFP_FS | __GFP_HARDWALL)
 #define GFP_DMA		__GFP_DMA
 #define GFP_DMA32	__GFP_DMA32
+/* 内核不需要直接访问的，可以映射到用户空间给硬件用，页面不可移动 */
 #define GFP_HIGHUSER	(GFP_USER | __GFP_HIGHMEM)
+/* 内核不需要直接访问的，可以映射到用户空间给硬件用，页面可以移动 */
 #define GFP_HIGHUSER_MOVABLE	(GFP_HIGHUSER | __GFP_MOVABLE | \
 			 __GFP_SKIP_KASAN_POISON)
 #define GFP_TRANSHUGE_LIGHT	((GFP_HIGHUSER_MOVABLE | __GFP_COMP | \

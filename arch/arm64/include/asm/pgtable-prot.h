@@ -13,6 +13,7 @@
 /*
  * Software defined PTE bits definition.
  */
+/* bit[55:58]: 预留给软件使用 */
 #define PTE_WRITE		(PTE_DBM)		 /* same as DBM (51) */
 #define PTE_DIRTY		(_AT(pteval_t, 1) << 55)
 #define PTE_SPECIAL		(_AT(pteval_t, 1) << 56)
