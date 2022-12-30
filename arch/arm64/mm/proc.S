@@ -404,13 +404,24 @@ SYM_FUNC_END(idmap_kpti_install_ng_mappings)
 SYM_FUNC_START(__cpu_setup)
 	tlbi	vmalle1				// Invalidate local TLB
 	dsb	nsh
-
+	/*
+	 * CPACR_EL1（Architectural Feature Access Control Register）是用来控制Trace，浮点运算单元以及SIMD
+	 * 单元的。FPEN，bits [21:20]是用来控制EL0和EL1状态的时候访问浮点单元和SIMD单元是否会产生exception
+	 * 从进入上一个exception level。这里的设定运行用户空间（EL0）和内核空间（EL1）访问浮点单元和SIMD单元
+	 *
+	 * 这里是使能架构特性访问控制寄存器CPACR_EL1中的FPEN域，用于设定在EL0和EL1下可以访问浮点单元和SIMD单元
+         */
 	mov	x1, #3 << 20
 	msr	cpacr_el1, x1			// Enable FP/ASIMD
+	/*
+	 * 使能调试监控系统控制寄存器MDSCR_EL1的TDCC域，在EL0下访问调试通信通道(Debug communication Channel,DCC)寄存器会自陷入EL1。
+         */
 	mov	x1, #1 << 12			// Reset mdscr_el1 and disable
 	msr	mdscr_el1, x1			// access to the DCC from EL0
 	isb					// Unmask debug exceptions now,
+	/* msr	daifclr, #8 : 使能PSTATE寄存器中的调试掩码域，处理器打开调试功能*/
 	enable_dbg				// since this is per-cpu
+	/* 关闭EL0访问PMU     */
 	reset_pmuserenr_el0 x1			// Disable PMU access from EL0
 	reset_amuserenr_el0 x1			// Disable AMU access from EL0
 
@@ -420,7 +431,25 @@ SYM_FUNC_START(__cpu_setup)
 	 */
 	mair	.req	x17
 	tcr	.req	x16
+	/* 居然是为了传给下一个函数，mair应该是别名x0 */
 	mov_q	mair, MAIR_EL1_SET
+        /*
+         * TCR用于管理页表映射，x10(tcr是别名吧)先给了一些初始值，具体含义看手册。
+         * tcr_set_t0sz --> 设置TCR的T0SZ域
+         * tcr_compute_pa_size --> 设置TCR的IPS域
+         * CONFIG_ARM64_HW_AFDBM --> 设置HD 域
+         *
+         * IPS域用于设置系统的物理地址大小，最小可以设置为4GB，最大可以设置4PB。通常Armv8系统的内核通过CONFIG_ARM64_PA_BITS来配置系统
+         * 最多支持的物理地址位宽，当宏为48bit时，最多支持256TB内存。ID_AA64MMFR0_EL1寄存器的PARang域表示系统能支持的最大物理地址位宽
+         * 这是一个只读寄存器。在这两个值中选择一个最小值并设置到TCR的IPS域中。
+         *
+         * CONFIG_ARM64_HW_AFDBM表示使用硬件来实现更新和访问脏页面的标志位，这是ARMv8.1支持的硬件特性，在TCR中HD域用于使能硬件更新脏
+         * 标志位，HA域用于使能硬件更新访问标志位。当使能这个特性后，访问一个物理页面硬件会自动设置PTE中的AF域，而不用软件通过缺页中断
+         * 来模拟了。我们可以通过读取ID_AA64MMFR1_EL1来判断硬件是否支持这个特性。
+         * 若HAFDBS为0，表示不支持。
+         * 若HAFDBS为1，表示硬件支持访问标志位。
+         * 若HAFDBS为2，表示硬件支持访问标志位和访问脏页面标志位。
+         */
 	mov_q	tcr, TCR_TxSZ(VA_BITS) | TCR_CACHE_FLAGS | TCR_SMP_FLAGS | \
 			TCR_TG_FLAGS | TCR_KASLR_FLAGS | TCR_ASID16 | \
 			TCR_TBI0 | TCR_A1 | TCR_KASAN_SW_FLAGS | TCR_MTE_FLAGS

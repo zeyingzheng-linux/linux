@@ -507,6 +507,12 @@ static int __init enable_crash_mem_map(char *arg)
 }
 early_param("crashkernel", enable_crash_mem_map);
 
+/*
+ * 主要是做整片内存的线性映射的，分成了三块。
+ * 1. zzy: __PHYS_OFFSET ---> __PHYS_OFFSET + TEXT_OFFSET (PAGE_KERNEL，启用CONT)
+ * 2. _text ---> __init_begin(PAGE_KERNEL->PAGE_KERNEL_RO，未启用CONT)，在 mark_linear_text_alias_ro 被设置为只读
+ * 3. __init_begin ---> 物理内存结束(PAGE_KERNEL，启用CONT)
+ */
 static void __init map_mem(pgd_t *pgdp)
 {
 	static const u64 direct_map_end = _PAGE_END(VA_BITS_MIN);
@@ -534,6 +540,12 @@ static void __init map_mem(pgd_t *pgdp)
 	 * So temporarily mark them as NOMAP to skip mappings in
 	 * the following for-loop
 	 */
+	/*
+	 * 把[_text, __init_begin]，即代码段和只读数据段设置成nomap属性，主要目的是后面想把它
+	 * 单独映射成成不启用CONT bit的属性，其他属性跟另外两段一样是PAGE_KERNEL，因为考虑到有
+	 * 些内核代码需要魔改代码段，例如Ftrace这种，但最后会在mark_linear_text_alias_ro将这段
+	 * 设置为只读的 PAGE_KERNEL_RO。
+         */
 	memblock_mark_nomap(kernel_start, kernel_end - kernel_start);
 
 #ifdef CONFIG_KEXEC_CORE
@@ -551,6 +563,10 @@ static void __init map_mem(pgd_t *pgdp)
 	for_each_mem_range(i, &start, &end) {
 		if (start >= end)
 			break;
+		/*
+		 * zzy: nomap属性就跳过，不映射了。但/reserved-memory里面的nopmap直接就给挪出memblock.memory了 
+		 * if (memblock_is_nomap(reg))
+		 */
 		/*
 		 * The linear map must allow allocation tags reading/writing
 		 * if MTE is present. Otherwise, it has the same attributes as
@@ -572,6 +588,7 @@ static void __init map_mem(pgd_t *pgdp)
 	 */
 	__map_memblock(pgdp, kernel_start, kernel_end,
 		       PAGE_KERNEL, NO_CONT_MAPPINGS);
+        /* 又把nomap清除掉了 */
 	memblock_clear_nomap(kernel_start, kernel_end - kernel_start);
 
 	/*
@@ -706,6 +723,10 @@ static bool arm64_early_this_cpu_has_bti(void)
 /*
  * Create fine-grained mappings for the kernel.
  */
+/*
+ * 主要是映射内核镜像的，因为前期汇编做了两个映射，一个是恒等映射，一个是内核镜像映射，但粒度比较粗，属于块映射的而且映射一大片
+ * 现在是被其中的内核镜像分成好几段来映射，属性略有不同，且改成了页面映射这种粒度，虽然里面部分可能还存在大块的映射。
+ */ 
 static void __init map_kernel(pgd_t *pgdp)
 {
 	static struct vm_struct vmlinux_text, vmlinux_rodata, vmlinux_inittext,

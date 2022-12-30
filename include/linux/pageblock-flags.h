@@ -17,8 +17,10 @@
 /* Bit indices that affect a whole block of pages */
 enum pageblock_bits {
 	PB_migrate,
+        /* 每个分组页块在位图中占用4bit，其中3bit用来存放页块的迁移类型 */
 	PB_migrate_end = PB_migrate + PB_migratetype_bits - 1,
 			/* 3 bits required for migrate types */
+        /* 如果被设置，内存碎片整理跳过这个页块 */
 	PB_migrate_skip,/* If set the block is skipped by compaction */
 
 	/*

@@ -566,6 +566,11 @@ static int __init __reserved_mem_check_root(unsigned long node)
 /*
  * __fdt_scan_reserved_mem() - scan a single FDT node for reserved memory
  */
+/**
+ * 将节点/reserved-memory读取保留的物理内存范围做特殊处理：
+ * 1. 如果有nomap属性，直接从memblock.memory中删除，就是内核访问不到了
+ * 2. 如果没有nommp属性，添加到memblock.reserve中，认为已经被分配
+ */
 static int __init __fdt_scan_reserved_mem(unsigned long node, const char *uname,
 					  int depth, void *data)
 {
@@ -640,6 +645,7 @@ void __init early_init_fdt_scan_reserved_mem(void)
 		return;
 
 	/* Process header /memreserve/ fields */
+        /* 处理节点/memreserve的保留内存：直接添加到memblock.reserve中 */
 	for (n = 0; ; n++) {
 		fdt_get_mem_rsv(initial_boot_params, n, &base, &size);
 		if (!size)
@@ -647,7 +653,9 @@ void __init early_init_fdt_scan_reserved_mem(void)
 		early_init_dt_reserve_memory_arch(base, size, false);
 	}
 
+        /* 处理节点/reserved-memory 的保留内存，   1. 如果有nomap属性，直接从memblock.memory中删除，就是内核访问不到了 2. 如果没有nommp属性，添加到memblock.reserve中，认为已经被分配 */
 	of_scan_flat_dt(__fdt_scan_reserved_mem, NULL);
+        /* 创建数据结构来管理那些reserve的内存 */
 	fdt_init_reserved_mem();
 	fdt_reserve_elfcorehdr();
 }
@@ -1102,6 +1110,7 @@ int __init early_init_dt_scan_memory(unsigned long node, const char *uname,
 	if (type == NULL || strcmp(type, "memory") != 0)
 		return 0;
 
+        /* 解析属性"linux,usable-memory"，若不存在则解析  "reg"，他们都是用来定义物理内存范围的 */
 	reg = of_get_flat_dt_prop(node, "linux,usable-memory", &l);
 	if (reg == NULL)
 		reg = of_get_flat_dt_prop(node, "reg", &l);
@@ -1123,6 +1132,7 @@ int __init early_init_dt_scan_memory(unsigned long node, const char *uname,
 			continue;
 		pr_debug(" - %llx, %llx\n", base, size);
 
+                /* 做一些必要检查，然后调用memblock_add吧物理内存范围添加到memblock.memory中 */
 		early_init_dt_add_memory_arch(base, size);
 
 		if (!hotpluggable)

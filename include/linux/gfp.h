@@ -382,7 +382,7 @@ static inline bool gfpflags_normal_context(const gfp_t gfp_flags)
 	return (gfp_flags & (__GFP_DIRECT_RECLAIM | __GFP_MEMALLOC)) ==
 		__GFP_DIRECT_RECLAIM;
 }
-
+/* 用OPT的用处，举个例子，当不存在ZONE_HIGHMEM的时候，它直接就是ZONE_NORMAL了 */
 #ifdef CONFIG_HIGHMEM
 #define OPT_ZONE_HIGHMEM ZONE_HIGHMEM
 #else
@@ -406,6 +406,12 @@ static inline bool gfpflags_normal_context(const gfp_t gfp_flags)
  * zone to use given the lowest 4 bits of gfp_t. Entries are GFP_ZONES_SHIFT
  * bits long and there are 16 of them to cover all possible combinations of
  * __GFP_DMA, __GFP_DMA32, __GFP_MOVABLE and __GFP_HIGHMEM.
+ *
+ * 备用区域列表：（内存节点的pg_data_t实例定义了备用区域列表 --> include/linux/mmzone.h ）
+ * 如果首选的内存节点和区域不能满足页分配请求，可以从备用的内存区域借用物理页，借用必须遵守一下原则：
+ * 1. 一个内存节点的某个区域类型可以从另一个内存节点的相同区域类型借用物理页。
+ * 2. 高区域类型可以从低区域类型借用物理页，例如ZONE_NORMAL可以从ZONE_DMA区借用物理页。
+ * 3. 低区域类型不能从高区域类型借用物理页，例如ZONE_DMA可以从ZONE_NORMAL区借用物理页。
  *
  * The zone fallback order is MOVABLE=>HIGHMEM=>NORMAL=>DMA32=>DMA.
  * But GFP_MOVABLE is not only a zone specifier but also an allocation
@@ -444,7 +450,10 @@ static inline bool gfpflags_normal_context(const gfp_t gfp_flags)
 #if 16 * GFP_ZONES_SHIFT > BITS_PER_LONG
 #error GFP_ZONES_SHIFT too large to create GFP_ZONE_TABLE integer
 #endif
-
+/*
+ * GFP_ZONES_SHIFT 区域类型占用的位数，例如有4个区，那么就2bit，GFP_ZONES_SHIFT must be <= 2 on 32 bit platforms
+ * GFP_ZONEMASK 代表4个区的mask，4个区就是4个mask
+ */
 #define GFP_ZONE_TABLE ( \
 	(ZONE_NORMAL << 0 * GFP_ZONES_SHIFT)				       \
 	| (OPT_ZONE_DMA << ___GFP_DMA * GFP_ZONES_SHIFT)		       \

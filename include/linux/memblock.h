@@ -38,6 +38,7 @@ enum memblock_flags {
 	MEMBLOCK_NONE		= 0x0,	/* No special request */
 	MEMBLOCK_HOTPLUG	= 0x1,	/* hotpluggable region */
 	MEMBLOCK_MIRROR		= 0x2,	/* mirrored region */
+	/* 即不添加到线性映射区域 */
 	MEMBLOCK_NOMAP		= 0x4,	/* don't add to kernel direct mapping */
 };
 
@@ -65,6 +66,13 @@ struct memblock_region {
  * @regions: array of regions
  * @name: the memory type symbolic name
  */
+/**
+ * 内存块类型使用数组存放内存区域，成员regions指向内存块区域数组
+ * cnt 是内存块区域的数量
+ * max 是内存块区域数组的元素个数
+ * total_size 是所有内存块区域的总长度
+ * name 是内存块类型的名称
+ */
 struct memblock_type {
 	unsigned long cnt;
 	unsigned long max;
@@ -80,10 +88,19 @@ struct memblock_type {
  * @memory: usable memory regions
  * @reserved: reserved memory regions
  */
+/**
+ * 在引导内核时可以使用内核参数"mem=nn[KMG]"指定可用内存的大小，这样内核就不能看见所有内存。
+ * 物理内存类型是包含所有内存范围，
+ * 内存类型只包含内核参数"mem="指定的可用范围。
+ */
 struct memblock {
+	/* True：从低地址向上分配，False：从高地址向下分配，Arm64是false */
 	bool bottom_up;  /* is bottom up direction? */
+        /* 可分配内存的最大物理地址 */
 	phys_addr_t current_limit;
+        /* 内存类型：已分配和未分配的内存 */
 	struct memblock_type memory;
+        /* 预留类型：已分配的内存 */
 	struct memblock_type reserved;
 };
 

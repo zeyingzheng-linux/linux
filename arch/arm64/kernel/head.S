@@ -91,6 +91,14 @@
 SYM_CODE_START(primary_entry)
 	bl	preserve_boot_args
 	bl	init_kernel_el			// w0=cpu_boot_mode
+	/*
+	 * 5.0: __PHYS_OFFSET = KERNEL_START - TEXT_OFFSET = _text - TEXT_OFFSET = KIMAGE_VADDR，链接脚本这么写的：. = KIMAGE_VADDR + TEXT_OFFSET 
+	 * 5.15:__PHYS_OFFSET = KERNEL_START = _text，						  链接脚本这么写的：. = KIMAGE_VADDR;   
+	 * 大家都是想让__PHYS_OFFSET = KIMAGE_VADDR，在上述两种内核里面都是MODULES_END, 而此处使用adrp指令来获取到的则是该链接地址对应的物理地址。
+	 * 想想adrp是怎么工作的，编译器能知道我当前指令的链接地址和物理地址还有即将计算位置的链接地址，随便一算就知道相对位置，将其编码进去指令里面
+	 * 指令工作的时候，就是将当前的PC值跟偏移做计算，就能得到__PHYS_OFFSET这个链接地址的对应物理地址了，记住了，此时跟页表毫无关系。
+	 * 所以最后x23拿到的其实就是 Dram的起始地址了。毕竟KIMAGE_VADDR本就是4K对齐的东西，adrp需要4K对齐。x23最后有用2M对齐了一下。
+         */
 	adrp	x23, __PHYS_OFFSET
 	and	x23, x23, MIN_KIMG_ALIGN - 1	// KASLR offset, defaults to 0
 	bl	set_cpu_boot_mode_flag
@@ -107,6 +115,25 @@ SYM_CODE_END(primary_entry)
 
 /*
  * Preserve the arguments passed by the bootloader in x0 .. x3
+ */
+/*
+ * 主要作用是将bootloade传出来的x0-x3这四个参数保存到boot_args数组中去，boot_args属于bss段，不是clean to poc的范围，即如果bootloader
+ * 偷偷访问过boot_args，那么cache mem里面残留的就是随机值，如果属于data段的话，cache mem留下的应该是0，因为data段保证clean to poc了。
+ * 仔细想一想，除了这种bootloader访问的情况，还有没有可能类似，在内核写之前已经被prefetch到cache mem了，因为data段的值是0，所以需要inval？
+ *
+ * boot_args 是对齐到__cacheline_aligned的。
+ *
+ * 其实无论怎么考虑，dmb sy我觉得都是可以拿掉的，boot_args的属性无外乎就那三种情况（此时MMU off，Dcache ON/OFF）：
+ * 1. 假设此时cacheable的，stp 之后，再去做inval，那么结果就可能丢数据，并且从armv8手册看来，如果没开EL2的情况下，此时Dcache就是NC的，
+ *    因为将其当成了Device-nGnRnE的memory type了。那么如果是EL2开了的情况，这段代码就有丢数据的可能，所以先不讨论这种情况。
+ * 2. 假设此时是write through的（说是很多架构把WT当做NC），那么stp之后，cache mem 和 mem 最终都将会是正确的数值，没必要做 inval操作，
+ *    就算为了兼容性，做inval操作，那么stp和inval操作之间应该是可以任意顺序的，这不影响最终的结果。
+ * 3. 假设此时是None cacheable的，写操作不写cache mem，直接写入mem，那么由于害怕bootloader访问过boot_args地址，导致cache mem有残留数据，
+ *	  到后期打开MMU之后，会从cache取数据，那么将取到脏数据，所以会需要做一下inval操作。但inval操作跟stp顺序应当是可以任意顺序都可以的。
+ *
+ * 综上所述，我觉得dmb sy都是没必要存在的。
+ * 如果是EL2的情况--Normal Non-shareable,Inner Write-Back Read-Allocate Write-Allocate，Outer Write-Back Read-Allocate Write-Allocate memory attr。
+ * 这段内核代码是不是欠考虑，是不是就可能丢数据，因为先stp 再去 inval的做法，看起来就很奇怪。
  */
 SYM_CODE_START_LOCAL(preserve_boot_args)
 	mov	x21, x0				// x21=FDT
@@ -259,6 +286,11 @@ SYM_CODE_END(preserve_boot_args)
  *   - first few MB of the kernel linear mapping to jump to once the MMU has
  *     been enabled
  */
+/*
+ * 我们在这里面创建了两张页表，一个是恒等映射，给TTBR0，一个是内核镜像的映射，给TTBR1。刚开始的时候，是物理地址运行，
+ * 物理内存不可能大到用TTBR1的，所以做恒等映射时，我们采用TTBR0来映射低256TB，而内核映射直接就是在高256TB了，到时候
+ * MMU一打开，我们内核取的都是链接地址，都在高256TB。
+ */
 SYM_FUNC_START_LOCAL(__create_page_tables)
 	mov	x28, lr
 
@@ -268,6 +300,7 @@ SYM_FUNC_START_LOCAL(__create_page_tables)
 	 * the kernel image, and thus are clean to the PoC per the boot
 	 * protocol.
 	 */
+	/* 可以查看下INIT_DIR_SIZE的大小，MMU查表也会看cache吗？就算不会，我们有时候也需要读表的嘛 */
 	adrp	x0, init_pg_dir
 	adrp	x1, init_pg_end
 	bl	dcache_inval_poc
@@ -290,7 +323,9 @@ SYM_FUNC_START_LOCAL(__create_page_tables)
 	/*
 	 * Create the identity mapping.
 	 */
+	/* 我们这里建立的是2M的块映射，而不是4K的页面映射，所以通常就三个物理页面就够了，分别对应PGD，PUD，PMD */
 	adrp	x0, idmap_pg_dir
+	/* .idmap.text段的起始地址 */
 	adrp	x3, __idmap_text_start		// __pa(__idmap_text_start)
 
 #ifdef CONFIG_ARM64_VA_BITS_52
@@ -299,8 +334,11 @@ SYM_FUNC_START_LOCAL(__create_page_tables)
 	mov	x5, #52
 	cbnz	x6, 1f
 #endif
+        /* 假设是 48 bit */
 	mov	x5, #VA_BITS_MIN
 1:
+        /* 将VA_BITS的值保存进vabits_actual里面，在(".mmuoff.data.write")段的，此时在EL1，所以inval的原因是在mmu off的情况下写，但在
+	 * MMU on的情况下读取，这样会读取到旧值或者是随机值，因为写时是NC的。另外还有个可能是prefetch，但是NC应该不存在prefetch吧 */
 	adr_l	x6, vabits_actual
 	str	x5, [x6]
 	dmb	sy
@@ -319,6 +357,7 @@ SYM_FUNC_START_LOCAL(__create_page_tables)
 	 * the physical address of __idmap_text_end.
 	 */
 	adrp	x5, __idmap_text_end
+	/* 计算第一个为1的位前面有多少个为0的位，反向计算，大于等于证明没有超过 VA_BITS，跳到1f */
 	clz	x5, x5
 	cmp	x5, TCR_T0SZ(VA_BITS_MIN) // default T0SZ small enough?
 	b.ge	1f			// .. then skip VA range extension
@@ -354,13 +393,26 @@ SYM_FUNC_START_LOCAL(__create_page_tables)
 	str_l	x4, idmap_ptrs_per_pgd, x5
 #endif
 1:
+        /* 将idmap_ptrs_per_pgd的值放入x4，即PTRS_PER_PGD */
 	ldr_l	x4, idmap_ptrs_per_pgd
 	adr_l	x6, __idmap_text_end		// __pa(__idmap_text_end)
 
 	map_memory x0, x1, x3, x6, x7, x3, x4, x10, x11, x12, x13, x14
+	/*
+         * x0: __pa(idmap_pg_dir)              tbl:    location of page table
+         * x1: 会被覆盖                        rtbl:   address to be used for first level page table entry (typically tbl + PAGE_SIZE)
+         * x3: __pa(__idmap_text_start)        vstart: start address to map
+         * x6: __pa(__idmap_text_end)          vend:   end address to map - we map [vstart, vend]
+         * x7: SWAPPER_MM_MMUFLAGS             flags:  flags to use to map last level entries
+         * x3: __pa(__idmap_text_start)        phys:   physical address corresponding to vstart - physical memory is contiguous
+         * x4: PTRS_PER_PGD                    pgds:   the number of pgd entries
+	 */
 
 	/*
 	 * Map the kernel image (starting with PHYS_OFFSET).
+	 */
+	/* __pa(init_pg_dir)
+	 * x23放着__PHYS_OFFSET
 	 */
 	adrp	x0, init_pg_dir
 	mov_q	x5, KIMAGE_VADDR		// compile time __va(_text)
@@ -372,6 +424,15 @@ SYM_FUNC_START_LOCAL(__create_page_tables)
 	add	x6, x6, x5			// runtime __va(_end)
 
 	map_memory x0, x1, x5, x6, x7, x3, x4, x10, x11, x12, x13, x14
+	/*
+         * x0: __pa(init_pg_dir)               tbl:    location of page table
+         * x1: 会被覆盖                        rtbl:   address to be used for first level page table entry (typically tbl + PAGE_SIZE)
+         * x5: compile time __va(_text) + x23  vstart: start address to map
+         * x6: runtime __va(_end)              vend:   end address to map - we map [vstart, vend]
+         * x7: SWAPPER_MM_MMUFLAGS             flags:  flags to use to map last level entries
+         * x3: runtime __pa(_text)             phys:   physical address corresponding to vstart - physical memory is contiguous
+         * x4: PTRS_PER_PGD                    pgds:   the number of pgd entries
+	 */
 
 	/*
 	 * Since the page tables have been populated with non-cacheable
@@ -423,18 +484,34 @@ SYM_FUNC_END(__create_page_tables)
  *   x0 = __PHYS_OFFSET
  */
 SYM_FUNC_START_LOCAL(__primary_switched)
+        /* 存储在内核映像的data段里面 */
 	adr_l	x4, init_task
+	/* 指向了第一个进程(init进程)的内核栈，THREAD_SIZE表示内核栈的大小 */
+	/*
+	 * 在linux5.0内核中，获取当前进程描述符的task_struct的方法发生了变化。在内核态，ARM64处理器运行在EL1上，sp_el0
+	 * 寄存器在EL1上下文是没用的，所以直接利用它来存放task_struct的指针是一个简洁而快速的办法。
+	 * init/init_task.c 在内核中是静态初始化的
+	 * 指向了第一个进程(init进程)的内核栈，THREAD_SIZE表示内核栈的大小
+	 */
 	init_cpu_task x4, x5, x6
-
+        /* vectors 定义在 arch/arm64/kernel/entry.S */
 	adr_l	x8, vectors			// load VBAR_EL1 with virtual
 	msr	vbar_el1, x8			// vector table address
 	isb
-
+        /*
+         * 内核栈顶 -16的地方存x29，-8的地方存x30
+         */
 	stp	x29, x30, [sp, #-16]!
 	mov	x29, sp
 
 	str_l	x21, __fdt_pointer, x5		// Save FDT pointer
 
+        /*
+         * kimage_vaddr: 存着 .quad (_text) 即 KIMAGE_VADDR
+         * x0: __PHYS_OFFSET 即Dram的物理起始地址
+         * 所以在内核的线性映射没建好之前，物理地址和内核符号之间的转换就可以通过这个偏移量来计算了。
+         *
+         */
 	ldr_l	x4, kimage_vaddr		// Save the offset between
 	sub	x4, x4, x0			// the kernel virtual and
 	str_l	x4, kimage_voffset, x5		// physical mappings
@@ -493,14 +570,37 @@ EXPORT_SYMBOL(kimage_vaddr)
  * Returns either BOOT_CPU_MODE_EL1 or BOOT_CPU_MODE_EL2 in w0 if
  * booted in EL1 or EL2 respectively.
  */
+/*
+ * 从Documentation/arm64/booting.txt 中的CPU mode要求中，可以看到内核入口处的处理器状态，
+ * 有如下两种：处于EL2（推荐）或者处于非安全模式的EL1。所以el2_setup函数会进行判断。
+ * 注意无论从EL2还是EL1接管的，从这个函数返回之后，都会回到EL1。
+ *
+ * 完成了el2_setup这个函数分析之后，我们再回头思考这样的问题：为何是el2_setup？为了没有el3_setup？
+ * 当一个SOC的实现在包括了EL3的支持，那么CPU CORE缺省应该进入EL3状态，为何这里只是判断EL2还是EL1，
+ * 从而执行不同的流程，如果是EL3状态，代码不就有问题了吗？实际上，即便是由于SOC支持TrustZone而导致
+ * cpu core上电后进入EL3，这时候，接管cpu控制的一定不是linux kernel（至少目前来看linux kernel不会做
+ * Secure monitor），而是Secure Platform Firmware（也就是传说中的secure monitor），它会进行硬件平台
+ * 的初始化，loading trusted OS等等，等到完成了secure world的构建之后，把控制权转交给non-secure world，
+ * 这时候，CPU core多半处于EL2（如果支持虚拟化）或者EL1（不支持虚拟化）。因此，对于linux kernel而言，
+ * 它感知不到secure world（linux kernel一般也不会做Trusted OS），仅仅是在non-secure world中呼风唤雨，
+ * 可以是Hypervisor或者rich OS
+ *
+ */
 SYM_FUNC_START(init_kernel_el)
 	mrs	x0, CurrentEL
 	cmp	x0, #CurrentEL_EL2
+	/* 如果当前是EL2跳转1f，如果是EL1往下执行 */
 	b.eq	init_el2
 
 SYM_INNER_LABEL(init_el1, SYM_L_LOCAL)
+	/*
+	 * EE：Endianness of data accesses at EL1, and stage 1 translation table walks in the EL1&0 translation regime，0 for little，1 for big
+	 * E0E：Endianness of data accesses at EL0，0 for little，1 for big
+	 * SCTLR_EL1_RES1：都是一些扩展之类的，暂时不要太关心
+	 */
 	mov_q	x0, INIT_SCTLR_EL1_MMU_OFF
 	msr	sctlr_el1, x0
+	/* 毕竟修改了大小端，isb确保指令执行完毕且刷新流水线和预取缓冲区，重新从指令高速缓存和内存中预取ISB之后的指令。 */
 	isb
 	mov_q	x0, INIT_PSTATE_EL1
 	msr	spsr_el1, x0
@@ -562,6 +662,22 @@ SYM_FUNC_END(init_kernel_el)
 /*
  * Sets the __boot_cpu_mode flag depending on the CPU boot mode passed
  * in w0. See arch/arm64/include/asm/virt.h for more info.
+ */
+/*
+ * __boot_cpu_mode 是处于data段里面的，所以它是clean to poc的，且链接脚本做了对齐，保证调用inval不会inval多了，导致影响到其他部分。
+ * 没放在bss段的一个原因是，设置得比较早，清bss段还在后头，所以如果放bss段的话，写进去的值就被冲掉了。
+ * el2_setup的返回时候，w0存放了cpu启动时候的Exception levell，因为系统启动之后仍要了解cpu启动时候的Exception level（例如判断是否
+ * 启动hyp mode），所以干脆搞了一个全局变量来保存启动时候的CPU mode。
+ *
+ * 思考一下为什么要搞两个32bit（.long）的变量，理论上只需要一个就够了对吧，基于以下几点：
+ * 1. 本质上我们希望所有的CPU在初始化的时候都处于同样的mode，不能有的是EL1有的是EL2。
+ * 2. 只有所有的CPU在启动时都处于EL2表示系统支持虚拟化，只有在这种情况下，KVM可以顺利启动（思考为什么要由bootloader来决定这个事情）
+ * 3. el2_setup和set_cpu_boot_mode_flag会在各个cpu上执行。
+ * 4. 注意__boot_cpu_mode的两个初始值，就知道是怎么回事了。
+ * 判断是否hyp  return __boot_cpu_mode[0] != __boot_cpu_mode[1];
+ *
+ * 看preserve_boot_args去思考此处dmb sy存在的合理性，此时CPU必然处在EL1。然后我就注意到，最新的linux内核已经将set_cpu_boot_mode_flag
+ * 放到了Enable_mmu之后再去执行，此时应该cache都已经被完全打开了，那么它的实现就单纯很多了。
  */
 SYM_FUNC_START_LOCAL(set_cpu_boot_mode_flag)
 	adr_l	x1, __boot_cpu_mode
@@ -698,22 +814,34 @@ SYM_FUNC_END(__secondary_too_slow)
  * Checks if the selected granule size is supported by the CPU.
  * If it isn't, park the CPU
  */
+/*
+ * 两个参数:
+ * x0: SCTLR_EL1_SET
+ * x1: __pa(init_pg_dir)
+ */
 SYM_FUNC_START(__enable_mmu)
+        /*
+         * ID_AA64MMFR0_EL1有记录系统支持物理页面的粒度，跟内核配置匹配一下。例如内核配置64K页面，总得查下能支持不把。
+         */
 	mrs	x2, ID_AA64MMFR0_EL1
+	/* 从ID_AA64MMFR0_TGRAN_SHIFT位开始取4bit，放入dest的最低有效位置，然后把dest其他位清零。即dest只有 [3:0] 存着有效值 */
 	ubfx	x2, x2, #ID_AA64MMFR0_TGRAN_SHIFT, 4
 	cmp     x2, #ID_AA64MMFR0_TGRAN_SUPPORTED_MIN
 	b.lt    __no_granule_support
 	cmp     x2, #ID_AA64MMFR0_TGRAN_SUPPORTED_MAX
 	b.gt    __no_granule_support
+	/* __early_cpu_boot_status 更新为 0 */
 	update_early_cpu_boot_status 0, x2, x3
 	adrp	x2, idmap_pg_dir
 	phys_to_ttbr x1, x1
 	phys_to_ttbr x2, x2
+	/* 给恒等映射，在MMU打开之后，在进程切换时会修改TTBR0的值，切换到真实进程地址空间。 */
 	msr	ttbr0_el1, x2			// load TTBR0
 	offset_ttbr1 x1, x3
+	/* 给内核映射 */
 	msr	ttbr1_el1, x1			// load TTBR1
 	isb
-
+	/* 终于把参数设置进去了，SCTLR_ELx_M 表示使能MMU */
 	set_sctlr_el1	x0
 
 	ret
@@ -856,12 +984,21 @@ SYM_FUNC_END(__relocate_kernel)
 #endif
 
 SYM_FUNC_START_LOCAL(__primary_switch)
+        /*
+         * 表示在内核启动加载时会被内核映像的虚拟地址重新做映射，这样可以防止黑客的攻击。早期，内核映像
+         * 映射到内核空间的虚拟地址是固定的，这样非法攻击者很容易利用这个特性对内核进行攻击。
+         */
 #ifdef CONFIG_RANDOMIZE_BASE
 	mov	x19, x0				// preserve new SCTLR_EL1 value
 	mrs	x20, sctlr_el1			// preserve old SCTLR_EL1 value
 #endif
 
 	adrp	x1, init_pg_dir
+	/*
+	 * 两个参数:
+	 * x0: SCTLR_EL1_SET
+	 * x1: __pa(init_pg_dir)
+	 */
 	bl	__enable_mmu
 #ifdef CONFIG_RELOCATABLE
 #ifdef CONFIG_RELR

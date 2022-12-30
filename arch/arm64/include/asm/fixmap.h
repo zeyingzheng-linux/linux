@@ -32,6 +32,17 @@
  * memory buffers is page-sized. Use set_fixmap(idx,phys)
  * to associate physical memory with a fixmap index.
  */
+/*
+ *                                                                  L0         L1          L2        L3
+ *                                                              |         ||         ||         |          |
+ * FIXADDR_TOP:   0xFFFF 7DFF FE7F 9000 --> 1111 1111 1111 1111 0111 1101 1111 1111 1111 1110 0111 1111 1001 0000 0000 0000
+ * FIXADDR_START: 0xFFFF 7DFF FEC0 0000 --> 1111 1111 1111 1111 0111 1101 1111 1111 1111 1110 1100 0000 0000 0000 0000 0000
+ *                                                                                              | 2M对齐
+ * 因为(MAX_FDT_SIZE + SZ_2M)是4M，再往底下 (6 + 1) * 4 = 28K，总共是 4124KB大小的空间(FIXADDR_START - FIXADDR_TOP)
+ * FDT一般是用块映射的，所以FDT用了L2 index (11 1110 110) 和 (11 1110 110)。后面再小的地址才开始用 11 1110 011(页映射)
+ * 可以观察到L3 index (11 1111 1001)到(11 1111 1111)就是用了 7 * 4 KB = 28KB的范围，那么剩下的范围就给到Temporary Fixmap。
+ * early_fixmap_init 已经把框架映射好了，所以FDT只需要填 L2那层的 PTE就可以，Temorary Fixmap只需要填L3那层的PTE就可以。
+ */
 enum fixed_addresses {
 	FIX_HOLE,
 

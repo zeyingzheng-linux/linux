@@ -2493,6 +2493,9 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
  * This array describes the order lists are fallen back to when
  * the free lists for the desirable migrate type are depleted
  */
+/*
+ * 申请某种迁移类型的页面时，如果这种迁移类型用完了，可以从其他迁移类型盗用(steal)物理页。见__rmqueue_fallback
+ */
 static int fallbacks[MIGRATE_TYPES][3] = {
 	[MIGRATE_UNMOVABLE]   = { MIGRATE_RECLAIMABLE, MIGRATE_MOVABLE,   MIGRATE_TYPES },
 	[MIGRATE_MOVABLE]     = { MIGRATE_RECLAIMABLE, MIGRATE_UNMOVABLE, MIGRATE_TYPES },
@@ -6620,7 +6623,11 @@ void __meminit memmap_init_range(unsigned long size, int nid, unsigned long zone
 		 * such that unmovable allocations won't be scattered all
 		 * over the place during system boot.
 		 */
+		/* 如果是分组页块的第一页 */
 		if (IS_ALIGNED(pfn, pageblock_nr_pages)) {
+                        /* zzy:
+			  * 内核在初始化时，将所有页块初始化为可移动类型，其他迁移类型的页的盗用产生的
+			  */
 			set_pageblock_migratetype(page, migratetype);
 			cond_resched();
 		}

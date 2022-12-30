@@ -505,6 +505,11 @@ struct zone {
 	 * recalculated at runtime if the sysctl_lowmem_reserve_ratio sysctl
 	 * changes.
 	 */
+	/*
+	 * 和高区类型相比，低区类型的内存相对少，是稀缺资源，而且有特殊用途。为了防止高区类型过度
+	 * 借用低区类型的物理页，低区类型需要才去防卫措施，保留一定数量的物理页。
+	 * 一个内存节点的某个区域类型从另一个节点的相同区域类型借用物理页，后者该毫无保留地借用。
+         */
 	long lowmem_reserve[MAX_NR_ZONES];
 
 #ifdef CONFIG_NUMA
@@ -525,6 +530,7 @@ struct zone {
 	 * Flags for a pageblock_nr_pages block. See pageblock-flags.h.
 	 * In SPARSEMEM, this map is stored in struct mem_section
 	 */
+	/* 如果定义了CONFIG_SPARSEMEM，这个变量就在mem_section中，也在本文件中 */
 	unsigned long		*pageblock_flags;
 #endif /* CONFIG_SPARSEMEM */
 
@@ -734,14 +740,43 @@ static inline bool zone_intersects(struct zone *zone,
 
 /* Maximum number of zones on a zonelist */
 #define MAX_ZONES_PER_ZONELIST (MAX_NUMNODES * MAX_NR_ZONES)
-
+/*
+ * 包含所有内存节点的备用区域列表有两种排序方法：
+ * 1. 节点优先：先根据节点距离从小到大，然后在每个节点里面根据区域类型从高到底
+ *              缺点是：在高区都还没耗尽时，就已经开始用低区域了，例如ZONE_DMA一
+ *              般比较小，节点优先会增大ZONE_DMA被耗尽的概率。
+ * 2. 区域优先：先根据区域类型从高到底，然后在每个区域类型根据节点距离从小到大
+ *              缺点是：不能保证优先选择距离近的节点。
+ *
+ * 默认的排序方法是自动选择：
+ * 如果是64bit系统，因为需要DMA和DMA32区域的设备相对少，所以选择节点优先。
+ * 如果是32bit系统，选择区域优先。
+ *
+ * 可以使用内核参数"numa_zonelist_order"指定排序方法：
+ * "d" -> 表示默认排序方法
+ * "n" -> 表示节点优先顺序
+ * "z" -> 表示区域优先顺序
+ * /proc/sys/vm/numa_zonelist_order 文件可以查看和修改排序方法。
+ *
+ * 举个例子：假设NUMA系统包含N0(ZONE_NORMAL, ZONE_DMA)和N1(ZONE_NORNAL)
+ *
+ * 节点优先：
+ *          N0:          N0_ZONE_NORMAL -> N0_ZONE_DMA -> N1_ZONE_NORMAL
+ *          N1:          N1_ZONE_NORMAL -> N0_ZONE_NORMA -> N0_ZONE_DMA
+ * 区域优先：
+ *          N0:          N0_ZONE_NORMAL -> N1_ZONE_NORMAL -> N0_ZONE_DMA
+ *          N1:          N1_ZONE_NORMAL -> N0_ZONE_NORMAL -> N0_ZONE_DMA
+ *
+ */
 enum {
+        /* 包含所有内存节点的备用区域列表 */
 	ZONELIST_FALLBACK,	/* zonelist with fallback */
 #ifdef CONFIG_NUMA
 	/*
 	 * The NUMA zonelists are doubled because we need zonelists that
 	 * restrict the allocations to a single node for __GFP_THISNODE.
 	 */
+	/* 只包含当前内存节点的备用区域列表，需要申请页时指定__GFP_THISNODE */
 	ZONELIST_NOFALLBACK,	/* zonelist without fallback (__GFP_THISNODE) */
 #endif
 	MAX_ZONELISTS
@@ -810,6 +845,7 @@ typedef struct pglist_data {
 	 * Generally the first zones will be references to this node's
 	 * node_zones.
 	 */
+        /* 备用区域列表 */
 	struct zonelist node_zonelists[MAX_ZONELISTS];
 
 	int nr_zones; /* number of populated zones in this node */

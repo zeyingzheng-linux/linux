@@ -149,9 +149,12 @@ SYM_FUNC_START_PI(dcache_inval_poc)
  *	- start   - virtual start address of region
  *	- end     - virtual end address of region
  */
+ /* 所以就是按照cache line大小对齐去invalid，只会invalid多了，而不会少了，所以要关注会不会多invalid了，当然你自己做好对齐就没问题 */
 	dcache_line_size x2, x3
 	sub	x3, x2, #1
+	/* 就是And操作 */
 	tst	x1, x3				// end cache line aligned?
+	/* 为 1 的就清0 */
 	bic	x1, x1, x3
 	b.eq	1f
 	dc	civac, x1			// clean & invalidate D / U line

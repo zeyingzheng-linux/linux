@@ -251,6 +251,13 @@ static void __init __rmem_check_for_overlap(void)
 /**
  * fdt_init_reserved_mem() - allocate and init all saved reserved memory regions
  */
+/*
+ * zzy:有个问题是reserved的有两种，一种是真的被内核已经用掉的，一种是dts想预留的，那么
+ * dts预留的东西，后面是怎么用起来的呢。dts预留如果有nomap属性是直接从memblock.memory
+ * 删除的，内核连映射都不做了。如果没有nomap属性的，就算已经分配出去的，内核是通过什么
+ * 手段来获取呢，这部分有待考察。可以想到的是直接ioremap传入物理地址和大小
+ * zzy: 此处的 nomap 是新增代码
+ */
 void __init fdt_init_reserved_mem(void)
 {
 	int i;

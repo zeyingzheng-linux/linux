@@ -107,7 +107,10 @@ static struct memblock_region memblock_reserved_init_regions[INIT_MEMBLOCK_RESER
 #ifdef CONFIG_HAVE_MEMBLOCK_PHYS_MAP
 static struct memblock_region memblock_physmem_init_regions[INIT_PHYSMEM_REGIONS];
 #endif
-
+/**
+ * memblock分配器把所有内存添加到memblock.memory中，把分配出去的内存块添加到memblock.reserved中。
+ * 内存块类型中的内存块区域数组按起始物理地址从小到大排序。
+ */
 struct memblock memblock __initdata_memblock = {
 	.memory.regions		= memblock_memory_init_regions,
 	.memory.cnt		= 1,	/* empty dummy entry */
@@ -833,7 +836,9 @@ int __init_memblock memblock_free(phys_addr_t base, phys_addr_t size)
 	kmemleak_free_part_phys(base, size);
 	return memblock_remove_range(&memblock.reserved, base, size);
 }
-
+/**
+ * 其实就是把memblock.memory的region，复制一份放在memblock.reserve，代表说这部分已经被分配了。
+ */
 int __init_memblock memblock_reserve(phys_addr_t base, phys_addr_t size)
 {
 	phys_addr_t end = base + size - 1;
@@ -2030,7 +2035,7 @@ static unsigned long __init __free_memory_core(phys_addr_t start,
 
 	return end_pfn - start_pfn;
 }
-
+/* 将memblock.memory和memblock.reserved的内存给到伙伴系统 */
 static void __init memmap_init_reserved_pages(void)
 {
 	struct memblock_region *region;
@@ -2038,6 +2043,7 @@ static void __init memmap_init_reserved_pages(void)
 	u64 i;
 
 	/* initialize struct pages for the reserved regions */
+        /* memblock.reserve的是认为在之前已经被分配走的了内存，要特殊照顾起来，__SetPageReserved */
 	for_each_reserved_mem_range(i, &start, &end)
 		reserve_bootmem_region(start, end);
 
@@ -2066,6 +2072,7 @@ static unsigned long __init free_low_memory_core_early(void)
 	 *  because in some case like Node0 doesn't have RAM installed
 	 *  low ram will be on Node1
 	 */
+	/* 将memblock.memory的内存释放给伙伴系统 */
 	for_each_free_mem_range(i, NUMA_NO_NODE, MEMBLOCK_NONE, &start, &end,
 				NULL)
 		count += __free_memory_core(start, end);

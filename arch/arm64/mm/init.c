@@ -215,6 +215,11 @@ early_param("mem", early_mem);
 
 void __init arm64_memblock_init(void)
 {
+        /*
+	 * -(s64)PAGE_OFFSET其实就代表了 0xFFFF_8000_0000_0000 - 0xFFFF_FFFF_FFFF_FFFF       的大小，思考 -2的补码表示就知道了
+	 * zzy: const s64 linear_region_size = -(s64)PAGE_OFFSET;
+	 * "linux,usable-memory-range"属性表示可用内存的范围，我们把超出这个范围的物理内存直接从memblock.memory删除
+	 */
 	s64 linear_region_size = PAGE_END - _PAGE_OFFSET(vabits_actual);
 
 	/*
@@ -248,6 +253,7 @@ void __init arm64_memblock_init(void)
 	 * linear mapping. Take care not to clip the kernel which may be
 	 * high in memory.
 	 */
+	/* 把线性映射区域不能覆盖的物理内存从memblock.memory中删除，其实这个一般就是空操作吧，毕竟linear map区域有128TB */
 	memblock_remove(max_t(u64, memstart_addr + linear_region_size,
 			__pa_symbol(_end)), ULLONG_MAX);
 	if (memstart_addr + linear_region_size < memblock_end_of_DRAM()) {
@@ -272,6 +278,11 @@ void __init arm64_memblock_init(void)
 	 * high up in memory, add back the kernel region that must be accessible
 	 * via the linear mapping.
 	 */
+	/**
+	 * 这里考虑的是"mem"参数指定的内存大小，如果指定了内存大小，那么把超过指定部分的物理内存范围从memblock.memory中删除
+	 * 因为内核镜像可以被加载到内存的高地址部分(我理解就是mem之外)，并且内核镜像必须是可以通过线性映射访问的，所以需要
+	 * 把内核镜像占用的物理内存范围重新添加到memblock.memory中。
+         */
 	if (memory_limit != PHYS_ADDR_MAX) {
 		memblock_mem_limit_remove_map(memory_limit);
 		memblock_add(__pa_symbol(_text), (u64)(_end - _text));
@@ -330,6 +341,7 @@ void __init arm64_memblock_init(void)
 	 * Register the kernel text, kernel data, initrd, and initial
 	 * pagetables with memblock.
 	 */
+	/* 内核镜像的内存不应该被再次分配 */
 	memblock_reserve(__pa_symbol(_stext), _end - _stext);
 	if (IS_ENABLED(CONFIG_BLK_DEV_INITRD) && phys_initrd_size) {
 		/* the generic initrd code expects virtual addresses */
