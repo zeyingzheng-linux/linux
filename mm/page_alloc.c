@@ -1035,6 +1035,10 @@ static inline void del_page_from_free_list(struct page *page, struct zone *zone,
  * so it's less likely to be used soon and more likely to be merged
  * as a higher order page
  */
+/* 最后合并成的页块阶数是order，如果order小于MAX_ORDER-2，则检查
+ * order+1的伙伴是否空闲，如果空闲，那么order的伙伴可能正在释放
+ * 很快就可以合并成order+2的页块，为了防止当前页块很快被分配出去，
+ * 把当前的页块添加到空闲链表的尾部 */
 static inline bool
 buddy_merge_likely(unsigned long pfn, unsigned long buddy_pfn,
 		   struct page *page, unsigned int order)
@@ -1108,20 +1112,24 @@ continue_merging:
 								migratetype);
 			return;
 		}
+		/* 得到伙伴的起始物理页号 */
 		buddy_pfn = __find_buddy_pfn(pfn, order);
 		/* 这个减法与下面一样，充分考虑了32/64 bit机器的性质与溢出，真牛逼 
 		 * 假设我们在64位机器下，如果pfn = 0，buddy_pfn = 1，page = 0x10
 		 * 最后结果就是 0x08，因为溢出了是 0xffff_ffff_ffff_ffff，指针也是
 		 * 这么个范围的数目，一相加就是结果了，不能用unsigned int，32位机器
 		 * 才可以用unsngned int，我理解*/
+		/* 得到伙伴的第一页的page实例 */
 		buddy = page + (buddy_pfn - pfn);
 
+		/* 检查伙伴是否空闲并且在相同的内存区域 */
 		if (!page_is_buddy(page, buddy, order))
 			goto done_merging;
 		/*
 		 * Our buddy is free or it is CONFIG_DEBUG_PAGEALLOC guard page,
 		 * merge with it and move up one order.
 		 */
+		/* 开启了调试页分配的配置宏CONFIG_DEBUG_PAGEALLOC，伙伴充当警戒页 */
 		if (page_is_guard(buddy))
 			clear_page_guard(zone, buddy, order, migratetype);
 		else
@@ -1140,6 +1148,10 @@ continue_merging:
 		 * We don't want to hit this code for the more frequent
 		 * low-order merging.
 		 */
+		/*
+		 * 运行到这里，意味着阶数大于或等于分组阶数pageblock_order，阻止
+		 * 把隔离类型的页块和其他类型的页块合并
+		 * */
 		if (unlikely(has_isolate_pageblock(zone))) {
 			int buddy_mt;
 
@@ -1147,11 +1159,13 @@ continue_merging:
 			buddy = page + (buddy_pfn - pfn);
 			buddy_mt = get_pageblock_migratetype(buddy);
 
+			/* 如果一个是隔离类型的页块，另一个是其他类型的页块，不能合并 */
 			if (migratetype != buddy_mt
 					&& (is_migrate_isolate(migratetype) ||
 						is_migrate_isolate(buddy_mt)))
 				goto done_merging;
 		}
+		/* 如果两个都是隔离类型的页块，或者都是其他类型的页块，那么继续合并 */
 		max_order = order + 1;
 		goto continue_merging;
 	}
@@ -3420,6 +3434,7 @@ static void free_unref_page_commit(struct page *page, unsigned long pfn,
 	if (pcp->count >= high) {
 		int batch = READ_ONCE(pcp->batch);
 
+		/* 还给伙伴系统 */
 		free_pcppages_bulk(zone, nr_pcp_free(pcp, high, batch), pcp);
 	}
 }
@@ -3433,6 +3448,7 @@ void free_unref_page(struct page *page, unsigned int order)
 	unsigned long pfn = page_to_pfn(page);
 	int migratetype;
 
+	/* page->index存放真实迁移类型 */
 	if (!free_unref_page_prepare(page, pfn, order))
 		return;
 
@@ -3444,6 +3460,10 @@ void free_unref_page(struct page *page, unsigned int order)
 	 * excessively into the page allocator
 	 */
 	migratetype = get_pcppage_migratetype(page);
+	/*
+	 * pcp只存放不可移动，可回收，可移动者三种类型的页面，如果页面不是这三种类型：
+	 * 1. 如果是隔离类型的页，不需要添加到pcp，直接释放
+	 * 2. 其他类型的页添加到可移动类型链表中，page->index存放真实迁移类型*/
 	if (unlikely(migratetype >= MIGRATE_PCPTYPES)) {
 		if (unlikely(is_migrate_isolate(migratetype))) {
 			free_one_page(page_zone(page), page, pfn, order, migratetype, FPI_NONE);
@@ -4092,6 +4112,7 @@ static inline unsigned int gfp_to_alloc_flags_cma(gfp_t gfp_mask,
 						  unsigned int alloc_flags)
 {
 #ifdef CONFIG_CMA
+	/* 可移动类型可以从CMA类型盗用页面 */
 	if (gfp_migratetype(gfp_mask) == MIGRATE_MOVABLE)
 		alloc_flags |= ALLOC_CMA;
 #endif
@@ -4180,7 +4201,7 @@ retry:
 			}
 		}
 
-		/* 这里是LOW水位，因为默认值就是LOW水位 */
+		/* 如果是快速路径默认值就是LOW水位 */
 		mark = wmark_pages(zone, alloc_flags & ALLOC_WMARK_MASK);
 		/* zone_watermark_ok判断成功，分配也可能失败，一方面可能是外碎片化严重
 		 * 另一个方面可能是无法借用其他迁移类型的内存 */
@@ -4774,6 +4795,7 @@ static void wake_all_kswapds(unsigned int order, gfp_t gfp_mask,
 static inline unsigned int
 gfp_to_alloc_flags(gfp_t gfp_mask)
 {
+	/* 使用最低水线，并且检查cpuset是否允许当前进程从某个内存节点分配页面 */
 	unsigned int alloc_flags = ALLOC_WMARK_MIN | ALLOC_CPUSET;
 
 	/*
@@ -4798,14 +4820,18 @@ gfp_to_alloc_flags(gfp_t gfp_mask)
 		 * Not worth trying to allocate harder for __GFP_NOMEMALLOC even
 		 * if it can't schedule.
 		 */
+		/* 原子分配来讲，如果没有要求禁止使用紧急保留内存，那么需要更努力分配
+		 * 		 如果要求禁止使用紧急内存，那么不需要更努力分配 */
 		if (!(gfp_mask & __GFP_NOMEMALLOC))
 			alloc_flags |= ALLOC_HARDER;
 		/*
 		 * Ignore cpuset mems for GFP_ATOMIC rather than fail, see the
 		 * comment for __cpuset_node_allowed().
 		 */
+		/* 对于原子分配，忽略cpuset */
 		alloc_flags &= ~ALLOC_CPUSET;
 	} else if (unlikely(rt_task(current)) && in_task())
+		/* 如果当前进程是实时进程，并且没有被中断抢占，那么需要更努力分配 */
 		alloc_flags |= ALLOC_HARDER;
 
 	alloc_flags = gfp_to_alloc_flags_cma(gfp_mask, alloc_flags);
@@ -5039,6 +5065,7 @@ restart:
 	if (!ac->preferred_zoneref->zone)
 		goto nopage;
 
+	/* 异步回收页，唤醒页回收进程 */
 	if (alloc_flags & ALLOC_KSWAPD)
 		wake_all_kswapds(order, gfp_mask, ac);
 
@@ -5046,6 +5073,7 @@ restart:
 	 * The adjusted alloc_flags might result in immediate success, so try
 	 * that first
 	 */
+	/* 使用最低水线分配页面 */
 	page = get_page_from_freelist(gfp_mask, order, alloc_flags, ac);
 	if (page)
 		goto got_pg;
@@ -5059,6 +5087,12 @@ restart:
 	 * Don't try this for allocations that are allowed to ignore
 	 * watermarks, as the ALLOC_NO_WATERMARKS attempt didn't yet happen.
 	 */
+	/*
+	 * 如果满足以下三个条件，那么执行异步模式的内存碎片整理
+	 * 1. 允许直接回收页
+	 * 2. 申请order > 3 或者 指定迁移类型不是可移动类型
+	 * 3. 调用者不是征粮队（承诺给我少量紧急保留内存使用，我可以释放更多的内存）
+	 * */
 	if (can_direct_reclaim &&
 			(costly_order ||
 			   (order > 0 && ac->migratetype != MIGRATE_MOVABLE))
@@ -5092,6 +5126,8 @@ restart:
 			 *  - unlikely to make entire pageblocks free on its
 			 *    own.
 			 */
+			/* 同步模式的内存最偏整理最近失败了，所有内存碎片整理被延迟执行，
+			 * 没必要继续尝试分配 */
 			if (compact_result == COMPACT_SKIPPED ||
 			    compact_result == COMPACT_DEFERRED)
 				goto nopage;
@@ -5101,15 +5137,18 @@ restart:
 			 * sync compaction could be very expensive, so keep
 			 * using async compaction.
 			 */
+			/* 同步模式的内存碎片整理代价太大，继续使用异步模式的内存碎片整理 */
 			compact_priority = INIT_COMPACT_PRIORITY;
 		}
 	}
 
 retry:
 	/* Ensure kswapd doesn't accidentally go to sleep as long as we loop */
+	/* 确保页面回收线程在我们循环的时候不会意外的睡眠 */
 	if (alloc_flags & ALLOC_KSWAPD)
 		wake_all_kswapds(order, gfp_mask, ac);
 
+	/* 类似有，征粮队忽略水线这样的操作 */
 	reserve_flags = __gfp_pfmemalloc_flags(gfp_mask);
 	if (reserve_flags)
 		alloc_flags = gfp_to_alloc_flags_cma(gfp_mask, reserve_flags);
@@ -5119,6 +5158,7 @@ retry:
 	 * ignored. These allocations are high priority and system rather than
 	 * user oriented.
 	 */
+	/* 如果调用者没有要求使用cpuset 或者 要求忽略水线，那么重新获取区域列表 */
 	if (!(alloc_flags & ALLOC_CPUSET) || reserve_flags) {
 		ac->nodemask = NULL;
 		ac->preferred_zoneref = first_zones_zonelist(ac->zonelist,
@@ -5126,31 +5166,38 @@ retry:
 	}
 
 	/* Attempt with potentially adjusted zonelist and alloc_flags */
+	/* 使用可能调整过的区域列表和分配标志尝试 */
 	page = get_page_from_freelist(gfp_mask, order, alloc_flags, ac);
 	if (page)
 		goto got_pg;
 
 	/* Caller is not willing to reclaim, we can't balance anything */
+	/* 调用者不愿意等待，不允许直接回收页，那么放弃 */
 	if (!can_direct_reclaim)
 		goto nopage;
 
 	/* Avoid recursion of direct reclaim */
+	/* 直接回收页的时候给进程设置了标志位PF_MEMALLOC，在直接回收页面的过程中可能申请页面，
+	 * 为了防止直接回收递归，这里发现进程设置了标志位PF_MEMALLOC，立即放弃 */
 	if (current->flags & PF_MEMALLOC)
 		goto nopage;
 
 	/* Try direct reclaim and then allocating */
+	/* 直接回收页 */
 	page = __alloc_pages_direct_reclaim(gfp_mask, order, alloc_flags, ac,
 							&did_some_progress);
 	if (page)
 		goto got_pg;
 
 	/* Try direct compaction and then allocating */
+	/* 针对申请order大于0的情况，执行同步模式的内存碎片整理 */
 	page = __alloc_pages_direct_compact(gfp_mask, order, alloc_flags, ac,
 					compact_priority, &compact_result);
 	if (page)
 		goto got_pg;
 
 	/* Do not loop if specifically requested */
+	/* 如果调用者要求不要重试，那么放弃 */
 	if (gfp_mask & __GFP_NORETRY)
 		goto nopage;
 
@@ -5158,9 +5205,11 @@ retry:
 	 * Do not retry costly high order allocations unless they are
 	 * __GFP_RETRY_MAYFAIL
 	 */
+	/* 如果申请order大于3，并且调用者没有要求多次重试，那么放弃 */
 	if (costly_order && !(gfp_mask & __GFP_RETRY_MAYFAIL))
 		goto nopage;
 
+	/* 检查重新尝试回收页面是否有意义 */
 	if (should_reclaim_retry(gfp_mask, order, ac, alloc_flags,
 				 did_some_progress > 0, &no_progress_loops))
 		goto retry;
@@ -5171,6 +5220,9 @@ retry:
 	 * implementation of the compaction depends on the sufficient amount
 	 * of free memory (see __compaction_suitable)
 	 */
+	/* 判断是否应该重试内存碎片整理。
+	 * did_some_progress > 0 表示直接回收页有进展。如果直接回收页面没有进展，那么重试内存
+	 * 碎片整理没有意义，因为内存碎片整理的当前实现依赖足够多的空闲页面 */
 	if (did_some_progress > 0 &&
 			should_compact_retry(ac, order, alloc_flags,
 				compact_result, &compact_priority,
@@ -5182,22 +5234,27 @@ retry:
 	 * Deal with possible cpuset update races or zonelist updates to avoid
 	 * a unnecessary OOM kill.
 	 */
+	/* 如果cpuset修改了允许当前进程从哪些内存节点申请页面，那么需要重试 */
 	if (check_retry_cpuset(cpuset_mems_cookie, ac) ||
 	    check_retry_zonelist(zonelist_iter_cookie))
 		goto restart;
 
 	/* Reclaim has failed us, start killing things */
+	/* 使用内存耗尽杀手选择一个进程杀死 */
 	page = __alloc_pages_may_oom(gfp_mask, order, ac, &did_some_progress);
 	if (page)
 		goto got_pg;
 
 	/* Avoid allocations with no watermarks from looping endlessly */
+	/* 如果当前进程正在被内存耗尽杀手杀死，并且ALLOC_OOM或者不允许使用紧急保留内存
+	 * 那么不要无线循环 */
 	if (tsk_is_oom_victim(current) &&
 	    (alloc_flags & ALLOC_OOM ||
 	     (gfp_mask & __GFP_NOMEMALLOC)))
 		goto nopage;
 
 	/* Retry as long as the OOM killer is making progress */
+	/* 如果内存耗尽杀手取得进展，那么重试 */
 	if (did_some_progress) {
 		no_progress_loops = 0;
 		goto retry;
@@ -5208,6 +5265,7 @@ nopage:
 	 * Deal with possible cpuset update races or zonelist updates to avoid
 	 * a unnecessary OOM kill.
 	 */
+	/* 如果cpuset修改了允许当前进程从哪些内存节点申请页面，那么需要重试 */
 	if (check_retry_cpuset(cpuset_mems_cookie, ac) ||
 	    check_retry_zonelist(zonelist_iter_cookie))
 		goto restart;
@@ -5216,11 +5274,13 @@ nopage:
 	 * Make sure that __GFP_NOFAIL request doesn't leak out and make sure
 	 * we always retry
 	 */
+	/* 确保不能失败的请求没有漏掉，总是重试的 */
 	if (gfp_mask & __GFP_NOFAIL) {
 		/*
 		 * All existing users of the __GFP_NOFAIL are blockable, so warn
 		 * of any new users that actually require GFP_NOWAIT
 		 */
+		/* 不能失败和不能直接回收，这两个一起用是错误的 */
 		if (WARN_ON_ONCE(!can_direct_reclaim))
 			goto fail;
 
@@ -5245,6 +5305,8 @@ nopage:
 		 * could deplete whole memory reserves which would just make
 		 * the situation worse
 		 */
+		/* 先使用标志位ALLOC_HARDER|ALLOC_CPUSET 尝试分配，如果失败，那么使用
+		 * 标志位ALLOC_HARDER分配 */
 		page = __alloc_pages_cpuset_fallback(gfp_mask, order, ALLOC_HARDER, ac);
 		if (page)
 			goto got_pg;
