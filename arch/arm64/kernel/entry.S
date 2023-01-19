@@ -594,7 +594,32 @@ SYM_CODE_END(el\el\ht\()_\regsize\()_\label)
 SYM_CODE_START_LOCAL(ret_to_kernel)
 	kernel_exit 1
 SYM_CODE_END(ret_to_kernel)
-
+/*
+ * glibc-2.20:
+ * int clone(int (*fn)(void *arg), void *child_stack, int flag, void *arg);
+ *
+ * __clone:
+ *	mov	x10, x0		//暂时保存相关参数，例如x10是子进程回调函数入口
+ *	mov	x11, x2		//x11是 flag
+ *	mov	x12, x3		//x12是 子进程回调函数的参数
+ *
+ *	mov x0, x2		//x2是 clone的flag，传给clone系统调用
+ *	mov x8, #__NR_clone	//x8是系统调用号，arm64后面是这么干的，zzy:以前的做法查询对比一下
+ * 	svc	0x0		//父进程陷入内核空间，然后父子进程都会从下一行返回，因为子进程在
+ *				//copy_thread的时候复制了父进程的pt_regs栈框，所以pt_regs->pc、
+ *				//pt_regs->pstate也复制了父进程的值，pt_regs->pc记录了返回用户空间
+ *				//的地址，所有父子进程都会从下面的语句返回。
+ *
+ *	cmp	x0, #0		//如果是0，证明是子进程，那么跳转到thread_start
+ *	beq	thread_start
+ *	ret			//如果非0，证明是父进程，一路返回回去就可以了
+ *
+ *thread_start:
+ * 	mov	x0, x12		//子进程回调函数的参数
+ *	blr	x10		//调用子进程回调函数
+ *
+ *	ret			//退出，子进程退出则会到这里，zzy:clone、_do_fork、用户thread、pthread关系
+ */
 SYM_CODE_START_LOCAL(ret_to_user)
 	ldr	x19, [tsk, #TSK_TI_FLAGS]	// re-check for single-step
 	enable_step_tsk x19, x2
@@ -867,6 +892,7 @@ SYM_CODE_START(ret_from_fork)
 	bl	schedule_tail
 	cbz	x19, 1f				// not a kernel thread
 	mov	x0, x20
+	/* 内核线程，直接跳转x19保存的内核线程回调函数，zzy:查看在哪里设置  */
 	blr	x19
 1:	get_current_task tsk
 	mov	x0, sp

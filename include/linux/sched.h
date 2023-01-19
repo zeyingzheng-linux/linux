@@ -526,28 +526,45 @@ struct sched_statistics {
 
 struct sched_entity {
 	/* For load-balancing: */
+	/* 调度实体的权重 */
 	struct load_weight		load;
+	/* 调度实体作为一个节点插入CFS的红黑树里 */
 	struct rb_node			run_node;
+	/* 在就绪队列里有一个链表rq->cfs_tasks，调度实体添加到就绪
+	 * 队列后会添加到该链表中 */
 	struct list_head		group_node;
+	/* 进程进入就绪队列时(调用enqueue_entity())，on_rq会被设置为1.
+	 * 当该进程处于睡眠等原因退出就绪队列时(调用dequeue_entity())
+	 * 时，on_rq会被清零
+	 * */
 	unsigned int			on_rq;
 
+	/* 计算调度实体虚拟时间的起始时间，当成真实时间看把，update_curr */
 	u64				exec_start;
+	/* 调度实体的总运行时间，这是真实时间 */
 	u64				sum_exec_runtime;
+	/* 调度实体的已经运行的总虚拟时间 */
 	u64				vruntime;
+	/* 上一次统计调度实体运行的总时间，见set_next_entity */
 	u64				prev_sum_exec_runtime;
 
+	/* 该调度实体发生迁移的次数 */
 	u64				nr_migrations;
 
+	/* 统计信息 */
 	struct sched_statistics		statistics;
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	int				depth;
 	struct sched_entity		*parent;
 	/* rq on which this entity is (to be) queued: */
+	/* 组调度开启时候，它指向上一层，加入只有一层，那么指向系统CFS就绪队列 */
 	struct cfs_rq			*cfs_rq;
 	/* rq "owned" by this entity/group: */
+	/* 组调度开启时候，它指向组自己的CFS就绪队列 */
 	struct cfs_rq			*my_q;
 	/* cached value of my_q->h_nr_running */
+	/* 表示进程在可运行(runable)状态的权重，这个值等于进程的权重 */
 	unsigned long			runnable_weight;
 #endif
 
@@ -558,6 +575,7 @@ struct sched_entity {
 	 * Put into separate cache line so it does not
 	 * collide with read-mostly values above.
 	 */
+	/* 与负载相关的信息 */
 	struct sched_avg		avg;
 #endif
 };
@@ -728,6 +746,7 @@ struct task_struct {
 	 */
 	struct thread_info		thread_info;
 #endif
+	/* 进程的当前状态 */
 	unsigned int			__state;
 
 #ifdef CONFIG_PREEMPT_RT
@@ -748,14 +767,19 @@ struct task_struct {
 	unsigned int			ptrace;
 
 #ifdef CONFIG_SMP
+	/* 表示进程正处于运行(running)状态 */
 	int				on_cpu;
 	struct __call_single_node	wake_entry;
 #ifdef CONFIG_THREAD_INFO_IN_TASK
 	/* Current CPU: */
+	/* 表示进程正运行在哪个cpu上 */
 	unsigned int			cpu;
 #endif
+	/* 用于wake affine特性 */
 	unsigned int			wakee_flips;
+	/* 用于记录上一次wakee_flips的时间 */
 	unsigned long			wakee_flip_decay_ts;
+	/* 表示上一次唤醒的哪个进程 */
 	struct task_struct		*last_wakee;
 
 	/*
@@ -766,18 +790,41 @@ struct task_struct {
 	 * used CPU that may be idle.
 	 */
 	int				recent_used_cpu;
+	/* 表示进程上一次运行在哪个cpu上 */
 	int				wake_cpu;
 #endif
+	/*
+	 * 用于设置进程的状态，支持的状态如下：
+	 * TASK_ON_RQ_QUEUED：表示进程正在就绪队列中运行
+	 * TASK_ON_RQ_MIGRATING：表示处于迁移过程中的进程，它可能不在就绪队列里
+	 * */
 	int				on_rq;
 
+	/* zzy: 各个优先级之间的关系 */
+	/* 进程动态优先级 */
 	int				prio;
+	/* 进程静态优先级 */
 	int				static_prio;
+	/* 基于static_prio和调度策略计算出来的优先级 */
 	int				normal_prio;
+	/* 实时进程优先级 */
 	unsigned int			rt_priority;
 
+	/* 调度类  */
 	const struct sched_class	*sched_class;
+
+	/*
+	 * Linux通过struct task_struct结构体描述每一个进程。但是调度类管理和调度的单位
+	 * 是调度实体，并不是task_struct。在支持组调度的时候，一个组也会抽象成一个调度
+	 * 实体，它并不是一个task。所以，我们在struct task_struct结构体中可以找到以下
+	 * 不同调度类的调度实体
+	 * */
+
+	/* 普通进程调度实体 */
 	struct sched_entity		se;
+	/* 实时进程调度实体 */
 	struct sched_rt_entity		rt;
+	/* 实时进程(deadline)调度实体 */
 	struct sched_dl_entity		dl;
 
 #ifdef CONFIG_SCHED_CORE
@@ -813,9 +860,11 @@ struct task_struct {
 #endif
 
 	unsigned int			policy;
+	/* 进程允许运行的CPU个数 */
 	int				nr_cpus_allowed;
 	const cpumask_t			*cpus_ptr;
 	cpumask_t			*user_cpus_ptr;
+	/* 进程允许运行的CPU位图 */
 	cpumask_t			cpus_mask;
 	void				*migration_pending;
 #ifdef CONFIG_SMP
@@ -846,6 +895,7 @@ struct task_struct {
 	struct list_head		trc_holdout_list;
 #endif /* #ifdef CONFIG_TASKS_TRACE_RCU */
 
+	/* 调度相关信息 */
 	struct sched_info		sched_info;
 
 	struct list_head		tasks;

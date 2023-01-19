@@ -334,6 +334,7 @@ int copy_thread(unsigned long clone_flags, unsigned long stack_start,
 	ptrauth_thread_init_kernel(p);
 
 	if (likely(!(p->flags & (PF_KTHREAD | PF_IO_WORKER)))) {
+		/* 处理子进程是用户进程的情况 */
 		*childregs = *current_pt_regs();
 		childregs->regs[0] = 0;
 
@@ -364,14 +365,21 @@ int copy_thread(unsigned long clone_flags, unsigned long stack_start,
 		 * When a user task is created from a kthread, childregs will
 		 * be initialized by start_thread() or start_compat_thread().
 		 */
+		/* 处理子进程是内核线程的情况 */
 		memset(childregs, 0, sizeof(struct pt_regs));
 		childregs->pstate = PSR_MODE_EL1h | PSR_IL_BIT;
 
 		p->thread.cpu_context.x19 = stack_start;
 		p->thread.cpu_context.x20 = stk_sz;
 	}
+	/*
+	 * 如果是内核线程的话，x19会指向内核线程的回调函数，在ret_from_fork调用
+	 * 新创建的子进程的入口地址指向一个汇编函数ret_from_fork，这是通过设置
+	 * 子进程的进程硬件上下文中的pc成员来实现的，这个涉及进程切换相关知识
+	 * */
 	p->thread.cpu_context.pc = (unsigned long)ret_from_fork;
 	p->thread.cpu_context.sp = (unsigned long)childregs;
+	/* zzy:cpu_context和sp和pt_regs的关系 */
 	/*
 	 * For the benefit of the unwinder, set up childregs->stackframe
 	 * as the final frame for the new task.

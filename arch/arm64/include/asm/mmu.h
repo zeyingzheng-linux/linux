@@ -17,6 +17,7 @@
 #include <linux/refcount.h>
 
 typedef struct {
+	/* asid_generation 放在bit[31:8] */
 	atomic64_t	id;
 #ifdef CONFIG_COMPAT
 	void		*sigpage;

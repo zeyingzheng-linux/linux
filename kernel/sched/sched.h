@@ -89,7 +89,9 @@ struct rq;
 struct cpuidle_state;
 
 /* task_struct::on_rq states: */
+/* 表示该进程在就绪队列中或者正在运行 */
 #define TASK_ON_RQ_QUEUED	1
+/* 表示进程正在迁移 */
 #define TASK_ON_RQ_MIGRATING	2
 
 extern __read_mostly int scheduler_running;
@@ -390,9 +392,31 @@ struct task_group {
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	/* schedulable entities of this group on each CPU */
+	/*
+	 * 指针数组，数组大小就是CPU数量。用户组中的进程可以在多个CPU上运行，因此我们需要
+	 * CPU个数的调度实体se，分别挂在每个CPU的根cfs_rq上。假设现在有两个用户组A和B，它
+	 * 们就是两个调度实体se，挂在顶层的就绪队列cfs_rq中。用户组A假设管理9个可运行进程
+	 * 这9个调度实体se作为用户组A调度实体的child，通过se->parent成员建立关系。用户组A
+	 * 自己也会维护一个就绪队列，暂且成为group cfs_rq，管理的9个进程就会挂在group cfs_rq
+	 * 上。当我们选择进程运行的时候，首先从根就绪队列cfs_rq上选择用户组A，再从用户组A
+	 * 的group cfs_rq上选择其中一个进程运行。
+	 * 存在一个root task_group 的se成员是NULL，cfs_rq成员就是根就绪队列。每个CPU都有
+	 * 存在一个子task_group的se成员指向group se，cfs_rq指向自己的就绪队列。每个CPU都有
+	 * */
 	struct sched_entity	**se;
 	/* runqueue "owned" by this group on each CPU */
 	struct cfs_rq		**cfs_rq;
+	/*
+	 * 调度实体有权重的概念，以权重比例分配CPU时间，用户组同样由权重的概念，shares就是
+	 * task_group的权重。如果现在有两核CPU上都有创建一个用户组A，分别把3 + 2个进程放到
+	 * CPU0和CPU1上，那么A1对应的group se有3个进程，A2对应的group se有2个进程，A1和A2
+	 * 的权重就需要用到shares来计算，首先它们是知道3 + 2个进程在自己group里面的权重的。
+	 * 所以就有 A1权重 = shares * (p1 + p2 + p3) / (p1 + p2 + p3 + p4 + p5)
+	 * p1 指的是在自己group里面的权重比
+	 *
+	 * 初步理解是这么来算权重的，但是代码里面的group se权重计算，确是用cpu负载去算的，
+	 * 具体看 update_cfs_group，group se->load.weight 和 share啥关系，zzy
+	 * */
 	unsigned long		shares;
 
 	/* A positive value indicates that this is a SCHED_IDLE group. */
@@ -404,6 +428,7 @@ struct task_group {
 	 * it in its own cacheline separated from the fields above which
 	 * will also be accessed at each tick.
 	 */
+	/* 整个用户组的负载贡献总和 */
 	atomic_long_t		load_avg ____cacheline_aligned;
 #endif
 #endif
@@ -527,12 +552,18 @@ struct cfs_bandwidth { };
 
 /* CFS-related fields in a runqueue */
 struct cfs_rq {
+	/* 就绪队列的总权重 */
 	struct load_weight	load;
+	/* 就绪队列中可运行状态进程的进程数量 */
 	unsigned int		nr_running;
+	/* h:hierarchy，在支持组调度机制时，这个成员表示CFS就绪队列中包含
+	 * 组调度里所有可运行状态的进程数量 */
 	unsigned int		h_nr_running;      /* SCHED_{NORMAL,BATCH,IDLE} */
 	unsigned int		idle_h_nr_running; /* SCHED_IDLE */
 
+	/* 统计就绪队列的总运行时间  */
 	u64			exec_clock;
+	/* 单步递增的，用于跟踪整个CFS就绪队列中红黑树里的最小vruntime值 */
 	u64			min_vruntime;
 #ifdef CONFIG_SCHED_CORE
 	unsigned int		forceidle_seq;
@@ -543,14 +574,18 @@ struct cfs_rq {
 	u64			min_vruntime_copy;
 #endif
 
+	/* CFS的红黑树的根 */
 	struct rb_root_cached	tasks_timeline;
 
 	/*
 	 * 'curr' points to currently running entity on this cfs_rq.
 	 * It is set to NULL otherwise (i.e when none are currently running).
 	 */
+	/* 指向当前正在运行的进程 */
 	struct sched_entity	*curr;
+	/* 用于切换下一个即将运行的进程 */
 	struct sched_entity	*next;
+	/* 用于抢占内核，当唤醒进程抢占了当前进程时，last指向这个当前进程 */
 	struct sched_entity	*last;
 	struct sched_entity	*skip;
 
@@ -562,6 +597,7 @@ struct cfs_rq {
 	/*
 	 * CFS load tracking
 	 */
+	/* 基于PELT算法的负载计算 */
 	struct sched_avg	avg;
 #ifndef CONFIG_64BIT
 	u64			load_last_update_time_copy;
@@ -921,12 +957,14 @@ DECLARE_STATIC_KEY_FALSE(sched_uclamp_used);
  */
 struct rq {
 	/* runqueue lock: */
+	/* 用于保护通用就绪队列的自旋锁 */
 	raw_spinlock_t		__lock;
 
 	/*
 	 * nr_running and cpu_load should be in the same cacheline because
 	 * remote CPUs use both these fields when doing load calculation.
 	 */
+	/* 就绪队列中可运行的进程数量 */
 	unsigned int		nr_running;
 #ifdef CONFIG_NUMA_BALANCING
 	unsigned int		nr_numa_running;
@@ -946,6 +984,7 @@ struct rq {
 #ifdef CONFIG_SMP
 	unsigned int		ttwu_pending;
 #endif
+	/* 记录进程切换的次数 */
 	u64			nr_switches;
 
 #ifdef CONFIG_UCLAMP_TASK
@@ -955,8 +994,11 @@ struct rq {
 #define UCLAMP_FLAG_IDLE 0x01
 #endif
 
+	/* 指向CFS的就绪队列 */
 	struct cfs_rq		cfs;
+	/* 指向实时进程的就绪队列 */
 	struct rt_rq		rt;
+	/* 指向实时进程的就绪队列 */
 	struct dl_rq		dl;
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
@@ -971,17 +1013,26 @@ struct rq {
 	 * one CPU and if it got migrated afterwards it may decrease
 	 * it on another CPU. Always updated under the runqueue lock:
 	 */
+	/* 统计不可中断(uninterruptible)状态的进程进入就绪队列的数量 */
 	unsigned int		nr_uninterruptible;
 
+	/* 指向正在运行的进程 */
 	struct task_struct __rcu	*curr;
+	/* 指向idle进程 */
 	struct task_struct	*idle;
+	/* 指向系统的stop进程 */
 	struct task_struct	*stop;
+	/* 下一次做负载均衡的时间 */
 	unsigned long		next_balance;
+	/* 进程切换时用于指向前任进程的内存描述符mm */
 	struct mm_struct	*prev_mm;
 
+	/* 用于更新就绪队列时钟的标志位 */
 	unsigned int		clock_update_flags;
+	/* 每次时钟节拍到来时会更新这个时钟 */
 	u64			clock;
 	/* Ensure that all clocks are in the same cache line */
+	/* 每次时钟节拍到来时会更新这个时钟，计算进程vruntime时使用该时钟 */
 	u64			clock_task ____cacheline_aligned;
 	u64			clock_pelt;
 	unsigned long		lost_idle_time;
@@ -998,10 +1049,16 @@ struct rq {
 #endif
 
 #ifdef CONFIG_SMP
+	/* 调度域的根 */
 	struct root_domain		*rd;
+	/* 指向CPU对应的最低等级的调度域，如果系统中没有配置CONFIG_SCHED_SMT
+	 * 那么指向该CPU对应的MC等级调度域 */
 	struct sched_domain __rcu	*sd;
 
+	/* CPU对应普通进程的量化计算能力，系统大约会预留最高计算能力的80%给
+	 * 普通进程，预留20%的计算能力给实时进程和实时进程 */
 	unsigned long		cpu_capacity;
+	/* CPU最高的量化计算能力，系统中拥有最强处理器能力的CPU通用量化为1024 */
 	unsigned long		cpu_capacity_orig;
 
 	struct callback_head	*balance_callback;
@@ -1009,17 +1066,24 @@ struct rq {
 	unsigned char		nohz_idle_balance;
 	unsigned char		idle_balance;
 
+	/* 若一个进程的实际算力大于CPU额定算力的80%，那么这个进程称为不合适的进程(misfit_task)
+	 * misfit_task_load记录这种进程的量化负载
+	 * */
 	unsigned long		misfit_task_load;
 
 	/* For active balancing */
 	int			active_balance;
+	/* 用于负载均衡，表示迁移的目标CPU */
 	int			push_cpu;
 	struct cpu_stop_work	active_balance_work;
 
 	/* CPU of this runqueue: */
+	/* 用于表示就绪队列运行在哪个CPU上 */
 	int			cpu;
+	/* 用于表示CPU处于active状态或者online状态 */
 	int			online;
 
+	/* 可运行状态的调度实体会添加到这个链表里 */
 	struct list_head cfs_tasks;
 
 	struct sched_avg	avg_rt;
@@ -2119,40 +2183,56 @@ struct sched_class {
 	int uclamp_enabled;
 #endif
 
+	/* 把进程添加到就绪队列中 */
 	void (*enqueue_task) (struct rq *rq, struct task_struct *p, int flags);
+	/* 把进程移出就绪队列 */
 	void (*dequeue_task) (struct rq *rq, struct task_struct *p, int flags);
+	/* 用于sched_yield()系统调用 */
 	void (*yield_task)   (struct rq *rq);
+	/* 用于yield_to()接口函数 */
 	bool (*yield_to_task)(struct rq *rq, struct task_struct *p);
 
+	/* 检查是否需要抢占当前进程 */
 	void (*check_preempt_curr)(struct rq *rq, struct task_struct *p, int flags);
 
+	/* 从就绪队列中选择一个最优进程来运行 */
 	struct task_struct *(*pick_next_task)(struct rq *rq);
 
+	/* 把prev进程重新添加到就绪队列中 */
 	void (*put_prev_task)(struct rq *rq, struct task_struct *p);
 	void (*set_next_task)(struct rq *rq, struct task_struct *p, bool first);
 
 #ifdef CONFIG_SMP
 	int (*balance)(struct rq *rq, struct task_struct *prev, struct rq_flags *rf);
+	/* 为进程选择一个最优的CPU就绪队列 */
 	int  (*select_task_rq)(struct task_struct *p, int task_cpu, int flags);
 
 	struct task_struct * (*pick_task)(struct rq *rq);
 
+	/* 迁移进程到一个新的就绪队列 */
 	void (*migrate_task_rq)(struct task_struct *p, int new_cpu);
 
+	/* 处理进程被唤醒的情况 */
 	void (*task_woken)(struct rq *this_rq, struct task_struct *task);
 
+	/* 设置进程可运行的CPU范围 */
 	void (*set_cpus_allowed)(struct task_struct *p,
 				 const struct cpumask *newmask,
 				 u32 flags);
 
+	/* 设置就绪队列的状态为online */
 	void (*rq_online)(struct rq *rq);
+	/* 关闭就绪队列 */
 	void (*rq_offline)(struct rq *rq);
 
 	struct rq *(*find_lock_rq)(struct task_struct *p, struct rq *rq);
 #endif
 
+	/* 处理时钟节拍 */
 	void (*task_tick)(struct rq *rq, struct task_struct *p, int queued);
+	/* 处理fork新进程与调度相关的一些初始化信息 */
 	void (*task_fork)(struct task_struct *p);
+	/* 处理进程已经终止的情况 */
 	void (*task_dead)(struct task_struct *p);
 
 	/*
@@ -2160,14 +2240,18 @@ struct sched_class {
 	 * cannot assume the switched_from/switched_to pair is serialized by
 	 * rq->lock. They are however serialized by p->pi_lock.
 	 */
+	/* 用于切换调度类 */
 	void (*switched_from)(struct rq *this_rq, struct task_struct *task);
+	/* 切换到下一个进程来运行 */
 	void (*switched_to)  (struct rq *this_rq, struct task_struct *task);
+	/* 改变进程优先级 */
 	void (*prio_changed) (struct rq *this_rq, struct task_struct *task,
 			      int oldprio);
 
 	unsigned int (*get_rr_interval)(struct rq *rq,
 					struct task_struct *task);
 
+	/* 更新就绪队列的运行时间，对于CFS的调度类，更新虚拟时间 */
 	void (*update_curr)(struct rq *rq);
 
 #define TASK_SET_GROUP		0

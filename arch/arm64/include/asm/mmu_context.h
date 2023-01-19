@@ -50,6 +50,9 @@ void cpu_do_switch_mm(phys_addr_t pgd_phys, struct mm_struct *mm);
 
 static inline void cpu_switch_mm(pgd_t *pgd, struct mm_struct *mm)
 {
+	/* mm是next的，走到switch这里，证明我们要切换到的是用户进程，如果
+	 * 发生next是一个内核线程肯定出问题了
+	 * */
 	BUG_ON(pgd == swapper_pg_dir);
 	cpu_set_reserved_ttbr0();
 	cpu_do_switch_mm(virt_to_phys(pgd),mm);

@@ -299,6 +299,12 @@ void init_wait_entry(struct wait_queue_entry *wq_entry, int flags)
 }
 EXPORT_SYMBOL(init_wait_entry);
 
+/* 如果__add_wait_queue与set_current_state顺序反了（假设有人写了主动请求调度的
+ * 代码，但是没有写好，顺序相反了），然后__schedule又没有判断是否抢占调度
+ * 那么该进程会被移除就绪队列，但是永远回不来了，因为此时还没有添加到等待队列
+ * 应该说因为on_rq那时候为0了，所以接下来pick_next的时候，不会重新把当前的进程
+ * 添加进去红黑树了，所以它再也回不来了，见 put_prev_entity
+ * */
 long prepare_to_wait_event(struct wait_queue_head *wq_head, struct wait_queue_entry *wq_entry, int state)
 {
 	unsigned long flags;

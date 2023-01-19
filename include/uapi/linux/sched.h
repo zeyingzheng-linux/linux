@@ -8,15 +8,23 @@
  * cloning flags:
  */
 #define CSIGNAL		0x000000ff	/* signal mask to be sent at exit */
+/* 表示父子进程共享地址空间，所以和CLONE_SIGHAND是最佳拍档 */
 #define CLONE_VM	0x00000100	/* set if VM shared between processes */
+/* 要求父子进程共享文件系统信息 */
 #define CLONE_FS	0x00000200	/* set if fs info shared between processes */
 #define CLONE_FILES	0x00000400	/* set if open files shared between processes */
+/* 表示父子进程共享相同的信号处理表，因此和CLONE_THREAD是最佳拍档 */
 #define CLONE_SIGHAND	0x00000800	/* set if signal handlers and blocked signals shared */
 #define CLONE_PIDFD	0x00001000	/* set if a pidfd should be placed in parent */
 #define CLONE_PTRACE	0x00002000	/* set if we want to let tracing continue on the child too */
 #define CLONE_VFORK	0x00004000	/* set if the parent wants the child to wake it up on mm_release */
+/* 表示新创建的进程是兄弟关系，而不是父子关系，他们拥有相同的父进程。 */
 #define CLONE_PARENT	0x00008000	/* set if we want to have the same parent as the cloner */
+/* 表示父子进程在同一个线程组里面。POSIX标准规定在一个进程的内部，多个线程共享一个PID，但是Linux内核
+ * 为每个线程和进程都分配了PID。为了满足POSIX标准，Linux内核中出现了线程组(thread group)的概念。
+ * sys_getpid()系统调用返回TGID，sys_gettid()系统调用返回线程的PID。 */
 #define CLONE_THREAD	0x00010000	/* Same thread group? */
+/* 表示父子进程不共享mount命名空间，每个进程可以拥有属于自己的mount命名空间 */
 #define CLONE_NEWNS	0x00020000	/* New mount namespace group */
 #define CLONE_SYSVSEM	0x00040000	/* share system V SEM_UNDO semantics */
 #define CLONE_SETTLS	0x00080000	/* create a new TLS for the child */
@@ -28,6 +36,11 @@
 #define CLONE_NEWCGROUP		0x02000000	/* New cgroup namespace */
 #define CLONE_NEWUTS		0x04000000	/* New utsname namespace */
 #define CLONE_NEWIPC		0x08000000	/* New ipc namespace */
+/* 表示子进程要创建新的User命名空间，User命名空间用于管理User ID(UID)和Group ID的映射
+ * 起到隔离UID的作用。一个User命名空间可以形成一个容器(container)，容器里的第一个进程
+ * 的UID是0，即用户root用户。容器里的root用户不具备系统root权限，从系统角度看，该用户
+ * 并非特权用户，而只是一个普通用户。
+ * */
 #define CLONE_NEWUSER		0x10000000	/* New user namespace */
 #define CLONE_NEWPID		0x20000000	/* New pid namespace */
 #define CLONE_NEWNET		0x40000000	/* New network namespace */

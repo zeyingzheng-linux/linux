@@ -486,6 +486,10 @@ static void dup_mm_exe_file(struct mm_struct *mm, struct mm_struct *oldmm)
 }
 
 #ifdef CONFIG_MMU
+/*
+ * mm是新进程的内存描述符，oldmm是父进程的内存描述符。该函数的主要作用是
+ * 遍历父进程中所有VMA，然后复制父进程VMA中对应的PTE到子进程相应VMA对应
+ * 的PTE中。注意，只是复制PTE，并没有复制VMA对应页面的内容 */
 static __latent_entropy int dup_mmap(struct mm_struct *mm,
 					struct mm_struct *oldmm)
 {
@@ -880,10 +884,14 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 
 	if (node == NUMA_NO_NODE)
 		node = tsk_fork_get_node(orig);
+	/* 为新进程分配一个进程描述符 */
 	tsk = alloc_task_struct_node(node);
 	if (!tsk)
 		return NULL;
 
+	/* 为新进程分配内核栈空间。对于ARM64来说，分配16KB大小的连续页面作为内核栈。
+	 * 如果系统配置了CONFIG_VMAP_STACK，那么会使用vmalloc来分配内存，否则用
+	 * alloc_pages_node来分配内存  */
 	stack = alloc_thread_stack_node(tsk, node);
 	if (!stack)
 		goto free_tsk;
@@ -893,6 +901,8 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 
 	stack_vm_area = task_stack_vm_area(tsk);
 
+	/* 把父进程描述符内容直接复制到新进程的进程描述符中，后面会对部分成员进行
+	 * 重新初始化 */
 	err = arch_dup_task_struct(tsk, orig);
 
 	/*
@@ -900,6 +910,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	 * sure they're properly initialized before using any stack-related
 	 * functions again.
 	 */
+	/* 指向新的内核栈 */
 	tsk->stack = stack;
 #ifdef CONFIG_VMAP_STACK
 	tsk->stack_vm_area = stack_vm_area;
@@ -928,6 +939,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	setup_thread_stack(tsk, orig);
 	clear_user_return_notifier(tsk);
 	clear_tsk_need_resched(tsk);
+	/* 在内核栈的最高地址处设置一个幻数，用于溢出检测 */
 	set_task_stack_end_magic(tsk);
 	clear_syscall_work_syscall_user_dispatch(tsk);
 
@@ -1442,15 +1454,22 @@ static struct mm_struct *dup_mm(struct task_struct *tsk,
 	struct mm_struct *mm;
 	int err;
 
+	/* 分配一个内存描述符mm */
 	mm = allocate_mm();
 	if (!mm)
 		goto fail_nomem;
 
+	/* 对拷，注意，这里仅仅是复制数据结构的内容，而不是复制内存 */
 	memcpy(mm, oldmm, sizeof(*mm));
 
+	/* 初始化子进程的内存描述符，并且调用mm_alloc_pgd函数来为子进程分配PGD
+	 * 每个进程在创建时都会分配一级页表，并且mm的一个pgd成员指向这个一级页表
+	 * 的基地址。对于ARM64来说，分配PGD的函数是pgd_alloc，arch/arm64/mm/pgd.c
+	 * */
 	if (!mm_init(mm, tsk, mm->user_ns))
 		goto fail_nomem;
 
+	/* 复制父进程的进程地址空间的页表到子进程 */
 	err = dup_mmap(mm, oldmm);
 	if (err)
 		goto free_pt;
@@ -1472,7 +1491,22 @@ free_pt:
 fail_nomem:
 	return NULL;
 }
-
+/*
+ * 在POSIX标准里，fork()的语义用于将父进程的数据段，代码段，内存映射区域以及栈等
+ * 内存全部复制到子进程。在早起的Linux内核设计中，fork()的实现是全盘复制的，也就是
+ * 把父进程的全部进程地址空间的内容复制到子进程。但是子进程通常在fork()之后就会调
+ * 用exec()来运行一个新程序，这样新的程序就会替换刚才复制的代码段，并重新初始化
+ * 数据段、栈以及分配新的内存映射，这种设计缺点很明显，非常耗时。
+ *
+ * 后来Linux采用写时复制技术来复制父进程的进程地址空间，而不是简单的全盘复制。
+ * 在执行fork()期间，子进程仅仅复制父进程的进程地址空间对应的页表到子进程中，并且
+ * 把父进程和子进程对应的页表项属性设置为只读，也就是子进程的这些映射区域的页表指向
+ * 父进程对应的物理页面，并将这些页面映射属性设置为只读。在fork()完成之后，当父进程
+ * 或者子进程需要对这些内存页面进行修改时，内核会捕获到缺页异常。在异常处理中对相应
+ * 页表做适当调整。其实就是分配多一个新页面，让修改的父或者子进程页表指向新的内存页
+ * 然后再做真正的修改，而且之前的页面的只读属性也恢复成了正确的属性过来，不再是只读，
+ * 从这一刻后，父子进程可以分别对各自的页表进程操作和修改，互不干扰
+ * */
 static int copy_mm(unsigned long clone_flags, struct task_struct *tsk)
 {
 	struct mm_struct *mm, *oldmm;
@@ -1492,6 +1526,9 @@ static int copy_mm(unsigned long clone_flags, struct task_struct *tsk)
 	 *
 	 * We need to steal a active VM for that..
 	 */
+	/* current就是父进程，如果父进程的内存描述符mm为空，那么代表
+	 * 父进程是一个没有进程地址空间的内核线程，不需要为子进程
+	 * 做内存复制，可以直接退出了 */
 	oldmm = current->mm;
 	if (!oldmm)
 		return 0;
@@ -1500,9 +1537,12 @@ static int copy_mm(unsigned long clone_flags, struct task_struct *tsk)
 	vmacache_flush(tsk);
 
 	if (clone_flags & CLONE_VM) {
+		/* 如果是vfork，那么CLONE_VM就会置起来，因此直接将子进程的mm指针
+		 * 指向父进程的mm即可，这是最简单最高效的做法，仅仅一个指针操作 */
 		mmget(oldmm);
 		mm = oldmm;
 	} else {
+		/* 如果没有置位，用dup_mm来复制父进程的进程地址空间 */
 		mm = dup_mm(tsk, current->mm);
 		if (!mm)
 			return -ENOMEM;
@@ -1945,6 +1985,8 @@ static __latent_entropy struct task_struct *copy_process(
 	 * Don't allow sharing the root directory with processes in a different
 	 * namespace
 	 */
+	/* CLONE_FS 要求父子进程共享文件系统信息，因此不能和CLONE_NEWNS、
+	 * CLONE_NEWUSER一起使用 */
 	if ((clone_flags & (CLONE_NEWNS|CLONE_FS)) == (CLONE_NEWNS|CLONE_FS))
 		return ERR_PTR(-EINVAL);
 
@@ -1972,6 +2014,14 @@ static __latent_entropy struct task_struct *copy_process(
 	 * multi-rooted process trees, prevent global and container-inits
 	 * from creating siblings.
 	 */
+	/*
+	 * 只有init进程才会设置SIGNAL_UNKILLABLE标志位。如果init进程或者容器init进程
+	 * 要使用CLONE_PARENT创建兄弟进程，那么该进程无法由init进程回收，idle进程
+	 * 无能为力，因此它会成为僵尸进程。
+	 * 对Linux内核来说，进程的祖先的idle进程，也成为swapper进程。
+	 * 对于用户空间来说，进程的祖先是init进程，所有的用户空间进程由init创建和派生
+	 * CLONE_PARENT表示创建的进程是兄弟关系，而不是父子关系，他们拥有相同的父进程
+	 * */
 	if ((clone_flags & CLONE_PARENT) &&
 				current->signal->flags & SIGNAL_UNKILLABLE)
 		return ERR_PTR(-EINVAL);
@@ -1980,6 +2030,15 @@ static __latent_entropy struct task_struct *copy_process(
 	 * If the new process will be in a different pid or user namespace
 	 * do not allow it to share a thread group with the forking task.
 	 */
+	/*
+	 * CLONE_NEWPID表示创建一个新的PID命名空间。在没有命名空间之间，进程唯一的标识
+	 * 是PID，在引入PID命名空间之后，标识一个进程同时需要PID命名空间和PID两个东西。
+	 *
+	 * CLONE_NEWUSER、CLONE_NEWPID 和CLONE_SIGHAND共享信号会有冲突
+	 *
+	 * 命名空间技术主要用于访问隔离，其原理是针对一类资源进程抽象，并将其封装在一起
+	 * 以供一个容器使用。每个容器都有自己的抽象，它们之间彼此不可见，因为访问是隔离的。
+	 * */
 	if (clone_flags & CLONE_THREAD) {
 		if ((clone_flags & (CLONE_NEWUSER | CLONE_NEWPID)) ||
 		    (task_active_pid_ns(current) != nsp->pid_ns_for_children))
@@ -2024,6 +2083,7 @@ static __latent_entropy struct task_struct *copy_process(
 		goto fork_out;
 
 	retval = -ENOMEM;
+	/* 为进程分配一个task_struct结构体和内核栈 */
 	p = dup_task_struct(current, node);
 	if (!p)
 		goto fork_out;
@@ -2056,11 +2116,13 @@ static __latent_entropy struct task_struct *copy_process(
 #ifdef CONFIG_PROVE_LOCKING
 	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
 #endif
+	/* 复制父进程的证书 */
 	retval = copy_creds(p, clone_flags);
 	if (retval < 0)
 		goto bad_fork_free;
 
 	retval = -EAGAIN;
+	/* RLIMIT_NPROC规定了每个实际用户可拥有的最大进程数，在此检查是否超过了限制 */
 	if (is_ucounts_overlimit(task_ucounts(p), UCOUNT_RLIMIT_NPROC, rlimit(RLIMIT_NPROC))) {
 		if (p->real_cred->user != INIT_USER &&
 		    !capable(CAP_SYS_RESOURCE) && !capable(CAP_SYS_ADMIN))
@@ -2074,13 +2136,25 @@ static __latent_entropy struct task_struct *copy_process(
 	 * to stop root fork bombs.
 	 */
 	retval = -EAGAIN;
+	/* max_threads表示当前系统最多可以拥有的进程数量，这个值由系统内存大小来决定，见fork_init。
+	 * nr_threads是系统的一个全局变量，如果系统已经分配的进程数量到达或者超过最大进程数目，
+	 * 那么内存资源不足会导致新进程的创建失败。 */
 	if (data_race(nr_threads >= max_threads))
 		goto bad_fork_cleanup_count;
 
 	delayacct_tsk_init(p);	/* Must remain after dup_task_struct() */
+	/* 1. 取消使用超级用户权限
+	 * 2. 告诉系统这不是一个worker线程
+	 * 3. 新创建的线程处于空闲状态，从Linux4.10内核开始，新增了这个标志，这个标志是为了解决空闲
+	 * 注入驱动(idle injection driver)的一些问题。从此之后，系统的空闲进程不仅包括PID为0的进程
+	 * 还可能包括设置了PF_IDLE标志的进程 */
 	p->flags &= ~(PF_SUPERPRIV | PF_WQ_WORKER | PF_IDLE | PF_NO_SETAFFINITY);
+	/* 设置PF_FORKNOEXEC，因此这个进程暂时还不能执行 */
 	p->flags |= PF_FORKNOEXEC;
+	/* 新进程的子进程链表 */
 	INIT_LIST_HEAD(&p->children);
+	/* 新进程的兄弟进程链表，另外这里队进程的task_struct数据结构的一些成员进行初始化，之前进程
+	 * 的task_struct数据结构的内容是从父进程复制过来的，但是作为新进程，有些成员还需要重新初始化 */
 	INIT_LIST_HEAD(&p->sibling);
 	rcu_copy_process(p);
 	p->vfork_done = NULL;
@@ -2162,6 +2236,8 @@ static __latent_entropy struct task_struct *copy_process(
 #endif
 
 	/* Perform scheduler related setup. Assign this task to a CPU. */
+	/* 初始化与进程调度相关的数据结构。调度实体用sched_entity数据结构来抽象
+	 * 每个进程、线程都是一个调度实体 */
 	retval = sched_fork(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_policy;
@@ -2180,27 +2256,34 @@ static __latent_entropy struct task_struct *copy_process(
 	retval = copy_semundo(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_security;
+	/* 复制父进程打开的文件等信息 */
 	retval = copy_files(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_semundo;
+	/* 复制父进程的fs_struct数据结构等信息 */
 	retval = copy_fs(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_files;
 	retval = copy_sighand(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_fs;
+	/* 复制父进程的信号系统  */
 	retval = copy_signal(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_sighand;
+	/* 复制父进程的进程地址空间的页表信息 */
 	retval = copy_mm(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_signal;
+	/* 复制父进程的命名空间 */
 	retval = copy_namespaces(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_mm;
+	/* 复制父进程中与I/O相关的内容 */
 	retval = copy_io(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_namespaces;
+	/* 复制父进程的内核堆信息  */
 	retval = copy_thread(clone_flags, args->stack, args->stack_size, p, args->tls);
 	if (retval)
 		goto bad_fork_cleanup_io;
@@ -2208,6 +2291,7 @@ static __latent_entropy struct task_struct *copy_process(
 	stackleak_task_init(p);
 
 	if (pid != &init_struct_pid) {
+		/* 为新进程分配一个pid数据结构和PID */
 		pid = alloc_pid(p->nsproxy->pid_ns_for_children, args->set_tid,
 				args->set_tid_size);
 		if (IS_ERR(pid)) {
@@ -2265,11 +2349,18 @@ static __latent_entropy struct task_struct *copy_process(
 	clear_tsk_latency_tracing(p);
 
 	/* ok, now we should be set up.. */
+	/* pid_nr分配一个全局的PID，这个全局的PID是从init进程的命名空间的角度来看的
+	 * pid_vnr是分配一个虚拟的PID，它是从当前进程的命名空间的角度来看的 */
 	p->pid = pid_nr(pid);
 	if (clone_flags & CLONE_THREAD) {
+		/* 若子进程归属于父进程线程组，也就是标志置位了
+		 * zzy:这里用宋宝华的例子验证以下
+		 * 那么group_leader指向父进程的group_leader，TGID同样指向父进程 */
 		p->group_leader = current->group_leader;
 		p->tgid = current->tgid;
 	} else {
+		/* 若子进程是线程组的领头进程，也就是标志被清零
+		 * 那么group_leader指向自己，TGID也一样指向自己 */
 		p->group_leader = p;
 		p->tgid = p->pid;
 	}
@@ -2366,6 +2457,11 @@ static __latent_entropy struct task_struct *copy_process(
 	}
 
 	init_task_pid_links(p);
+	/* 把新进程添加到进程管理的流程里。这里会区分新进程是否是线程组的领头进程，
+	 * 根据不同的情况来将其添加到进程管理的流程里。
+	 * 1. 如果新进程是领头进程，那么需要通过list_add_tail_rcu()函数将其添加到进程
+	 * 管理的全局链表init_task.tasks中。另外还需要根据不同情况，调用attach_pid函数
+	 * 来把新进程添加到不同类型的哈希表中，这些哈希表包括以下看到的四种类型 */
 	if (likely(p->pid)) {
 		ptrace_init_task(p, (clone_flags & CLONE_PTRACE) || trace);
 
@@ -2405,6 +2501,7 @@ static __latent_entropy struct task_struct *copy_process(
 					  &p->signal->thread_head);
 		}
 		attach_pid(p, PIDTYPE_PID);
+		/* 递增变量 */
 		nr_threads++;
 	}
 	total_forks++;
@@ -2426,6 +2523,7 @@ static __latent_entropy struct task_struct *copy_process(
 
 	copy_oom_score_adj(clone_flags, p);
 
+	/* 返回子进程描述符 */
 	return p;
 
 bad_fork_cancel_cgroup:
@@ -2606,17 +2704,24 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 	trace_sched_process_fork(current, p);
 
 	pid = get_task_pid(p, PIDTYPE_PID);
+	/* pid_vnr 获取虚拟的pid，即从当前命名空间内部看到的PID */
 	nr = pid_vnr(pid);
 
 	if (clone_flags & CLONE_PARENT_SETTID)
 		put_user(nr, args->parent_tid);
 
+	/*
+	 * 对于vfork创建的子进程，首先要保证子进程先运行。在调用exec()或者exit()
+	 * 之前，父子进程是共享数据的。在子进程调用exec()或者exit()之后，父进程
+	 * 才可以被调度运行，因此这里使用一个完成量来达到后面扣留父进程的目的。
+	 * */
 	if (clone_flags & CLONE_VFORK) {
 		p->vfork_done = &vfork;
 		init_completion(&vfork);
 		get_task_struct(p);
 	}
 
+	/* 唤醒新创建的进程，也就是把进程加入就绪队列并接受调度，运行 */
 	wake_up_new_task(p);
 
 	/* forking complete and child started to run, tell ptracer */
@@ -2624,6 +2729,7 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 		ptrace_event_pid(trace, pid);
 
 	if (clone_flags & CLONE_VFORK) {
+		/* 对于vfork等待子进程调用exec()或者exit() */
 		if (!wait_for_vfork_done(p, &vfork))
 			ptrace_event_pid(PTRACE_EVENT_VFORK_DONE, pid);
 	}
@@ -2659,6 +2765,7 @@ SYSCALL_DEFINE0(fork)
 	return kernel_clone(&args);
 #else
 	/* can not support in nommu mode */
+	/* fork是严重依赖MMU，没有MMU，实现不了fork这种COW */
 	return -EINVAL;
 #endif
 }

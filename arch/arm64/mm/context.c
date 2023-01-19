@@ -20,6 +20,7 @@
 static u32 asid_bits;
 static DEFINE_RAW_SPINLOCK(cpu_asid_lock);
 
+/* 每次增加 ASID_FIRST_VERSION */
 static atomic64_t asid_generation;
 static unsigned long *asid_map;
 
@@ -162,12 +163,16 @@ static u64 new_context(struct mm_struct *mm)
 	u64 generation = atomic64_read(&asid_generation);
 
 	if (asid != 0) {
+                /* asid不为0，说明改进程已经分配过ASID了，那么只需要添加最新的
+                   * generation就可以组成一个新的软件ASID了
+                   * */
 		u64 newasid = generation | (asid & ~ASID_MASK);
 
 		/*
 		 * If our current ASID was active during a rollover, we
 		 * can continue to use it and this was just a false alarm.
 		 */
+		/* 检查新ASID有效就直接返回了 */
 		if (check_update_reserved_asid(asid, newasid))
 			return newasid;
 
@@ -194,21 +199,30 @@ static u64 new_context(struct mm_struct *mm)
 	 * a reserved TTBR0 for the init_mm and we allocate ASIDs in even/odd
 	 * pairs.
 	 */
+	/* 进入这里说明之前的硬件ASID不能使用，那么从map里面查找第一个空闲的位
+	 * 并将其作为这次的硬件ASID。注意0号ASID预留给init_mm使用了
+	 * 另外在是能了 CONFIG_UNMAP_KERNEL_AT_EL0 的内核里为每个进程分配两个ASID
+	 * 即奇、偶组配成一对。
+	 * */
 	asid = find_next_zero_bit(asid_map, NUM_USER_ASIDS, cur_idx);
 	if (asid != NUM_USER_ASIDS)
 		goto set_asid;
 
 	/* We're out of ASIDs, so increment the global generation count */
+	/* 如果找不到一个空闲位，说明溢出了，只能提升generation，并调用
+	 * flush_context 刷新所有CPU上的TLB，同时清零 map */
 	generation = atomic64_add_return_relaxed(ASID_FIRST_VERSION,
 						 &asid_generation);
 	flush_context();
 
 	/* We have more ASIDs than CPUs, so this will always succeed */
+	/* 这次在清零map之后分配，一定会成功 */
 	asid = find_next_zero_bit(asid_map, NUM_USER_ASIDS, 1);
 
 set_asid:
 	__set_bit(asid, asid_map);
 	cur_idx = asid;
+	/* 新生成的软件ASID */
 	return idx2asid(asid) | generation;
 }
 
@@ -238,6 +252,10 @@ void check_and_switch_context(struct mm_struct *mm)
 	 *   because atomic RmWs are totally ordered for a given location.
 	 */
 	old_active_asid = atomic64_read(this_cpu_ptr(&active_asids));
+	/* generation计数相等，说明没有发生ASID的溢出，换入进程的ASID还依然
+         * 属于同一批次。所以可以goto switch_mm_fastpath 进行地址切换，同时
+         * 设置新的ASID到per-cpu变量 active_asids 中
+         * */
 	if (old_active_asid && asid_gen_match(asid) &&
 	    atomic64_cmpxchg_relaxed(this_cpu_ptr(&active_asids),
 				     old_active_asid, asid))
@@ -245,6 +263,11 @@ void check_and_switch_context(struct mm_struct *mm)
 
 	raw_spin_lock_irqsave(&cpu_asid_lock, flags);
 	/* Check that our ASID belongs to the current generation. */
+	/* 再读一次asid，然后做generation的比较，不相同说明至少发生了一次ASID溢出
+	 * 那么需要分配一个新的软件ASID计数，并且设置的mm->context.id中去
+	 *
+	 * 后续还需要刷新本地的TLB，应为ASID溢出了
+	 * */
 	asid = atomic64_read(&mm->context.id);
 	if (!asid_gen_match(asid)) {
 		asid = new_context(mm);
@@ -266,6 +289,7 @@ switch_mm_fastpath:
 	 * Defer TTBR0_EL1 setting for user threads to uaccess_enable() when
 	 * emulating PAN.
 	 */
+	/* 页表切换 */
 	if (!system_uses_ttbr0_pan())
 		cpu_switch_mm(mm->pgd, mm);
 }
@@ -364,8 +388,10 @@ void cpu_do_switch_mm(phys_addr_t pgd_phys, struct mm_struct *mm)
 	ttbr1 &= ~TTBR_ASID_MASK;
 	ttbr1 |= FIELD_PREP(TTBR_ASID_MASK, asid);
 
+	/* asid 放在ttbr1里面 */
 	write_sysreg(ttbr1, ttbr1_el1);
 	isb();
+	/* 页表基地址在ttbr0里面，用户进程嘛 */
 	write_sysreg(ttbr0, ttbr0_el1);
 	isb();
 	post_ttbr_update_workaround();
