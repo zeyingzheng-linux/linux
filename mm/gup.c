@@ -513,8 +513,11 @@ retry:
 	if (unlikely(pmd_bad(*pmd)))
 		return no_page_table(vma, flags);
 
+	/* 通过PMD和地址获取PTE，这里还获取了一个自旋锁，返回时候
+	 * 还需要调用 pte_unmap_unlock 来释放自旋锁 */
 	ptep = pte_offset_map_lock(mm, pmd, address, &ptl);
 	pte = *ptep;
+	/* 判断页是否在内存中 */
 	if (!pte_present(pte)) {
 		swp_entry_t entry;
 		/*
@@ -522,10 +525,15 @@ retry:
 		 * even while it is being migrated, so for that case we
 		 * need migration_entry_wait().
 		 */
+		/* 如果没配掩码没有定义FOLL_MIGRATION，即这个页面没有在页面合并过程
+		 * 中出现，那么返回错误 */
 		if (likely(!(flags & FOLL_MIGRATION)))
 			goto no_page;
+		/* 如果PTE为空，则返回错误 */
 		if (pte_none(pte))
 			goto no_page;
+		/* 如果PTE是正在合并的swap页面，那么调用 migration_entry_wait
+		 * 等待这个页面合并完成之后，再尝试*/
 		entry = pte_to_swp_entry(pte);
 		if (!is_migration_entry(entry))
 			goto no_page;
@@ -535,11 +543,13 @@ retry:
 	}
 	if ((flags & FOLL_NUMA) && pte_protnone(pte))
 		goto no_page;
+	/* 如果分配掩码支持可写属性(FOLL_WRITE)，但是PTE只具有只读属性，那么返回NULL */
 	if ((flags & FOLL_WRITE) && !can_follow_write_pte(pte, flags)) {
 		pte_unmap_unlock(ptep, ptl);
 		return NULL;
 	}
 
+	/* 根据PTE来返回普通映射页面的page数据结构 */
 	page = vm_normal_page(vma, address, pte);
 	if (!page && pte_devmap(pte) && (flags & (FOLL_GET | FOLL_PIN))) {
 		/*
@@ -547,12 +557,16 @@ retry:
 		 * case since they are only valid while holding the pgmap
 		 * reference.
 		 */
+		/* 处理设备映射页面(device mapping page)的情况 */
 		*pgmap = get_dev_pagemap(pte_pfn(pte), *pgmap);
 		if (*pgmap)
 			page = pte_page(pte);
 		else
 			goto no_page;
 	} else if (unlikely(!page)) {
+		/* 处理 vm_normal_page 函数没返回没返回有效的页面的情况，通常返回错误
+		 * 有一种情况比较特殊，对于zero page，不会返回错误
+		 * is_zero_pfn 函数判断该页面是否为zero page*/
 		if (flags & FOLL_DUMP) {
 			/* Avoid special (like zero) pages in core dumps */
 			page = ERR_PTR(-EFAULT);
@@ -586,6 +600,8 @@ retry:
 			goto out;
 		}
 	}
+	/* 当flag设置为FOLL_TOUCH时，需要标记页面可访问，调用 mark_page_accessed
+	 * 设置页面是活跃的 */
 	if (flags & FOLL_TOUCH) {
 		if ((flags & FOLL_WRITE) &&
 		    !pte_dirty(pte) && !PageDirty(page))
@@ -625,6 +641,7 @@ retry:
 	}
 out:
 	pte_unmap_unlock(ptep, ptl);
+	/* 返回这个页面 */
 	return page;
 no_page:
 	pte_unmap_unlock(ptep, ptl);
@@ -821,6 +838,11 @@ static struct page *follow_p4d_mask(struct vm_area_struct *vma,
  * an error pointer if there is a mapping to something not represented
  * by a page descriptor (see also vm_normal_page()).
  */
+/* vma: 参数address所属的VMA
+ * address: 虚拟地址，用于查找页表的虚拟地址
+ * flags: 内部使用的标志
+ * ctx: 主要用于处理 ZONE_DEVICE 映射的情况
+ * */
 static struct page *follow_page_mask(struct vm_area_struct *vma,
 			      unsigned long address, unsigned int flags,
 			      struct follow_page_context *ctx)
@@ -858,6 +880,8 @@ static struct page *follow_page_mask(struct vm_area_struct *vma,
 		return no_page_table(vma, flags);
 	}
 
+	/* 层层查找，最后调用follow_page_pte，遍历PTE，并返回address对应的
+	 * 物理页面的page数据结构 */
 	return follow_p4d_mask(vma, address, pgd, flags, ctx);
 }
 
@@ -1103,6 +1127,13 @@ static int check_vma_flags(struct vm_area_struct *vma, unsigned long gup_flags)
  * instead of __get_user_pages. __get_user_pages should be used only if
  * you need some special @gup_flags.
  */
+/* 主要用于锁住内存，即保证用户空间分配的内存不会被释放。*/
+/* start: 用户进程的虚拟起始地址
+ * nr_pages: 需要锁定的页面数量
+ * gup_flags: 内部使用的锁定属性
+ * pages: 锁定页面的指针，它是一个page指针数组
+ * vmas: 映射每一个物理页面的VMA，它是一个VMA的指针数组
+ * */
 static long __get_user_pages(struct mm_struct *mm,
 		unsigned long start, unsigned long nr_pages,
 		unsigned int gup_flags, struct page **pages,
@@ -1134,6 +1165,8 @@ static long __get_user_pages(struct mm_struct *mm,
 
 		/* first iteration or cross vma bound */
 		if (!vma || start >= vma->vm_end) {
+			/* 调用 find_vma 查找VMA，如果VMA->vm_start 大于查找地址
+			 * 那么它将会尝试扩增VMA，把VMA->vm_start边界扩大到start*/
 			vma = find_extend_vma(mm, start);
 			if (!vma && in_gate_area(mm, start)) {
 				ret = get_gate_page(mm, start & PAGE_MASK,
@@ -1174,14 +1207,18 @@ retry:
 		 * If we have a pending SIGKILL, don't keep faulting pages and
 		 * potentially allocating memory.
 		 */
+		/* 如果进程收到一个SIGKILL，那么不需要继续做内存分配，直接报错退出 */
 		if (fatal_signal_pending(current)) {
 			ret = -EINTR;
 			goto out;
 		}
+		/* 判断当前进程是否需要调度，内核通常在while循环中添加这个函数，优化系统延迟 */
 		cond_resched();
 
+		/* 查看VMA中的虚拟页面是否已经分配了物理内存，将返回页面的page数据结构 */
 		page = follow_page_mask(vma, start, foll_flags, &ctx);
 		if (!page) {
+			/* 人为触发一个缺页异常 */
 			ret = faultin_page(vma, start, &foll_flags, locked);
 			switch (ret) {
 			case 0:
@@ -1207,6 +1244,8 @@ retry:
 			ret = PTR_ERR(page);
 			goto out;
 		}
+		/* 分配完页面后，pages指针数组指向这些页面，最后调用函数刷新这些
+		 * 页面对应的高速缓存 */
 		if (pages) {
 			pages[i] = page;
 			flush_anon_page(vma, page, start);
@@ -1604,6 +1643,7 @@ int __mm_populate(unsigned long start, unsigned long len, int ignore_errors)
 		if (!locked) {
 			locked = 1;
 			mmap_read_lock(mm);
+			/* 寻找对应的VMA是否被分配了，如果没找到，则退出循环 */
 			vma = find_vma(mm, nstart);
 		} else if (nstart >= vma->vm_end)
 			vma = vma->vm_next;
@@ -1623,6 +1663,7 @@ int __mm_populate(unsigned long start, unsigned long len, int ignore_errors)
 		 * double checks the vma flags, so that it won't mlock pages
 		 * if the vma was already munlocked.
 		 */
+		/* 人为制造缺页异常并完成地址映射 */
 		ret = populate_vma_page_range(vma, nstart, nend, &locked);
 		if (ret < 0) {
 			if (ignore_errors) {

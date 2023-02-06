@@ -1528,6 +1528,7 @@ static struct vmap_area *alloc_vmap_area(unsigned long size,
 	might_sleep();
 	gfp_mask = gfp_mask & GFP_RECLAIM_MASK;
 
+	/* 使用 vmap_area 数据结构来描述一个vmalloc区域 */
 	va = kmem_cache_alloc_node(vmap_area_cachep, gfp_mask, node);
 	if (unlikely(!va))
 		return ERR_PTR(-ENOMEM);
@@ -1540,6 +1541,8 @@ static struct vmap_area *alloc_vmap_area(unsigned long size,
 
 retry:
 	preload_this_cpu_lock(&free_vmap_area_lock, gfp_mask, node);
+	/* 5.0的实现基本上是，在已经用过的区域找缝隙，如果缝隙不够
+	 * 就重新开辟，P193 */
 	addr = __alloc_vmap_area(size, align, vstart, vend);
 	spin_unlock(&free_vmap_area_lock);
 
@@ -1555,6 +1558,7 @@ retry:
 	va->vm = NULL;
 
 	spin_lock(&vmap_area_lock);
+	/* 把这个缝隙注册到红黑树中 */
 	insert_vmap_area(va, &vmap_area_root, &vmap_area_list);
 	spin_unlock(&vmap_area_lock);
 
@@ -2404,22 +2408,29 @@ static struct vm_struct *__get_vm_area_node(unsigned long size,
 	struct vm_struct *area;
 	unsigned long requested_size = size;
 
+	/* vmalloc在分配过程中可能会睡眠，进程在中断上下文睡眠是不好的编程习惯 */
 	BUG_ON(in_interrupt());
 	size = ALIGN(size, 1ul << shift);
 	if (unlikely(!size))
 		return NULL;
 
+	/* 如果分配的vmalloc区域是用于IOREMAP的，那么默认情况下按照128个页面对齐 */
 	if (flags & VM_IOREMAP)
 		align = 1ul << clamp_t(int, get_count_order_long(size),
 				       PAGE_SHIFT, IOREMAP_MAX_ORDER);
 
+	/* 分配 vm_struct 数据结构来描述这个vmalloc区域 */
 	area = kzalloc_node(sizeof(*area), gfp_mask & GFP_RECLAIM_MASK, node);
 	if (unlikely(!area))
 		return NULL;
 
+	/* 如果没有定义 VM_NO_GUARD 标志，那么要多分配一个页面，例如分配4K大小的内存
+	 * 而vmalloc分配8K的内存块 */
 	if (!(flags & VM_NO_GUARD))
 		size += PAGE_SIZE;
 
+	/* 在vmalloc区域中查找一块大小合适并且没有使用的空间，这段空间成为缝隙(hole)
+	 * va_start = VMALLOC_START , va_end = VMALLOC_END */
 	va = alloc_vmap_area(size, align, start, end, node, gfp_mask);
 	if (IS_ERR(va)) {
 		kfree(area);
@@ -2428,6 +2439,7 @@ static struct vm_struct *__get_vm_area_node(unsigned long size,
 
 	kasan_unpoison_vmalloc((void *)va->va_start, requested_size);
 
+	/* 构建一个vm_struct 空间 */
 	setup_vmalloc_vm(area, va, flags, caller);
 
 	return area;
@@ -2859,6 +2871,8 @@ vm_area_alloc_pages(gfp_t gfp, int nid,
 
 	/* High-order pages or fallback path if "bulk" fails. */
 
+	/* 循环为每个页面调用alloc_page接口分配实际的物理页面，可看到vmalloc分配的页面可能
+	 * 不是连续的 */
 	while (nr_allocated < nr_pages) {
 		if (nid == NUMA_NO_NODE)
 			page = alloc_pages(gfp, order);
@@ -2890,15 +2904,18 @@ static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 	unsigned long addr = (unsigned long)area->addr;
 	unsigned long size = get_vm_area_size(area);
 	unsigned long array_size;
+	/* vm_struct 区域实际包含了多少个页面 */
 	unsigned int nr_small_pages = size >> PAGE_SHIFT;
 	unsigned int page_order;
 
 	array_size = (unsigned long)nr_small_pages * sizeof(struct page *);
 	gfp_mask |= __GFP_NOWARN;
+	/* 当没有指定必须从DMA的zone分配内存时，优先使用高端内存 */
 	if (!(gfp_mask & (GFP_DMA | GFP_DMA32)))
 		gfp_mask |= __GFP_HIGHMEM;
 
 	/* Please note that the recursion is strictly bounded. */
+	/* 使用 area->pages 保存已分配页面的page数据结构的指针 */
 	if (array_size > PAGE_SIZE) {
 		area->pages = __vmalloc_node(array_size, 1, nested_gfp, node,
 					area->caller);
@@ -2917,6 +2934,8 @@ static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 	set_vm_area_page_order(area, page_shift - PAGE_SHIFT);
 	page_order = vm_area_page_order(area);
 
+	/* 填充page指针数组，也就是分配真正的物理页面，可以理解为for 循环一页
+	 * 一页的分配，那么页面自然不是连续的  */
 	area->nr_pages = vm_area_alloc_pages(gfp_mask, node,
 		page_order, nr_small_pages, area->pages);
 
@@ -2933,6 +2952,7 @@ static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 		goto fail;
 	}
 
+	/* 建立页面映射，由vm_struct区域的起始地址可以知道PGD页表项，然后遍历PGD页表 */
 	if (vmap_pages_range(addr, addr + size, prot, area->pages,
 			page_shift) < 0) {
 		warn_alloc(gfp_mask, NULL,
@@ -2977,9 +2997,11 @@ void *__vmalloc_node_range(unsigned long size, unsigned long align,
 	unsigned long real_align = align;
 	unsigned int shift = PAGE_SHIFT;
 
+	/* 分配内存大小不能为0 */
 	if (WARN_ON_ONCE(!size))
 		return NULL;
 
+	/* 要分配的内存不能大于系统的所有内存 */
 	if ((size >> PAGE_SHIFT) > totalram_pages()) {
 		warn_alloc(gfp_mask, NULL,
 			"vmalloc error: size %lu, exceeds total pages",
@@ -3020,6 +3042,7 @@ again:
 		goto fail;
 	}
 
+	/* 分配物理内存，并和 vm_struct 空间建立映射关系 */
 	addr = __vmalloc_area_node(area, gfp_mask, prot, shift, node);
 	if (!addr)
 		goto fail;

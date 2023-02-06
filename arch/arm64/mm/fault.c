@@ -43,10 +43,14 @@
 #include <asm/traps.h>
 
 struct fault_info {
+	/* 用于修复异常状态的函数指针 */
 	int	(*fn)(unsigned long far, unsigned int esr,
 		      struct pt_regs *regs);
+	/* 处理失败时Linux内核要发送的信号类型 */
 	int	sig;
+	/* 处理失败时Linux内核要发送的信号编码 */
 	int	code;
+	/* 异常状态的名称 */
 	const char *name;
 };
 
@@ -467,7 +471,9 @@ static void do_bad_area(unsigned long far, unsigned int esr,
 	}
 }
 
+/* 错误的映射 */
 #define VM_FAULT_BADMAP		0x010000
+/* 错误的访问 */
 #define VM_FAULT_BADACCESS	0x020000
 
 static vm_fault_t __do_page_fault(struct mm_struct *mm, unsigned long addr,
@@ -476,6 +482,7 @@ static vm_fault_t __do_page_fault(struct mm_struct *mm, unsigned long addr,
 {
 	struct vm_area_struct *vma = find_vma(mm, addr);
 
+	/* 找不到vma，说明addr没有在进程地址空间。例如内核访问空指针之列的吧 */
 	if (unlikely(!vma))
 		return VM_FAULT_BADMAP;
 
@@ -483,6 +490,9 @@ static vm_fault_t __do_page_fault(struct mm_struct *mm, unsigned long addr,
 	 * Ok, we have a good vm_area for this memory access, so we can handle
 	 * it.
 	 */
+	/* 处理一种特殊情况，若找到的VMA起始地址大于addr，那么需要判断是否可以把VMA的地址
+	 * 扩展到addr，如果可以扩展，说明这是一个好的VMA，否则，这是一个由问题的VMA。
+	 * */
 	if (unlikely(vma->vm_start > addr)) {
 		if (!(vma->vm_flags & VM_GROWSDOWN))
 			return VM_FAULT_BADMAP;
@@ -494,6 +504,10 @@ static vm_fault_t __do_page_fault(struct mm_struct *mm, unsigned long addr,
 	 * Check that the permissions on the VMA allow for the fault which
 	 * occurred.
 	 */
+	/* 首先这是一个好的VMA，我们判断下VMA的属性。如在 do_page_fault中通过 ESR的WnR可知，
+	 * 这次异常是写内存导致的，若这个VMA的属性(vma->flags)不具有可写属性(VMA_WRITE)，那么
+	 * 说明是一个错误的访问。
+	 * */
 	if (!(vma->vm_flags & vm_flags))
 		return VM_FAULT_BADACCESS;
 	return handle_mm_fault(vma, addr, mm_flags, regs);
@@ -513,6 +527,10 @@ static bool is_write_abort(unsigned int esr)
 	return (esr & ESR_ELx_WNR) && !(esr & ESR_ELx_CM);
 }
 
+/* addr: 表示异常发生时的虚拟地址，由FAR提供
+ * esr: 表示异常发生时的异常状态，由ESR提供
+ * regs: 异常发生时的pt_regs
+ * */
 static int __kprobes do_page_fault(unsigned long far, unsigned int esr,
 				   struct pt_regs *regs)
 {
@@ -530,9 +548,14 @@ static int __kprobes do_page_fault(unsigned long far, unsigned int esr,
 	 * If we're in an interrupt or have no user context, we must not take
 	 * the fault.
 	 */
+	/* 如果缺页异常发生中断上下文或者内核线程中，那么直接跳转到 no_context标签处执行，一般就
+	 * 是kernel fault了，不用处理与进程地址空间相关的部分。这是因为如果异常发生在中断上下文
+	 * 或者内核线程中，此时处理器在内核态执行，而且处理器正在使用内核空间的虚拟地址。
+	 * */
 	if (faulthandler_disabled() || !mm)
 		goto no_context;
 
+	/* 通过PSTATE寄存器来判断异常是否发生在EL0，如果是设置特定标志位 */
 	if (user_mode(regs))
 		mm_flags |= FAULT_FLAG_USER;
 
@@ -544,10 +567,12 @@ static int __kprobes do_page_fault(unsigned long far, unsigned int esr,
 	 */
 	if (is_el0_instruction_abort(esr)) {
 		/* It was exec fault */
+		/* 如果是EL0中的指令异常，说明这个进程地址空间是具有可执行权限的 */
 		vm_flags = VM_EXEC;
 		mm_flags |= FAULT_FLAG_INSTRUCTION;
 	} else if (is_write_abort(esr)) {
 		/* It was write fault */
+		/* 如果是写内存区域发生的错误并且不是高速缓存导致的异常错误 */
 		vm_flags = VM_WRITE;
 		mm_flags |= FAULT_FLAG_WRITE;
 	} else {
@@ -560,11 +585,17 @@ static int __kprobes do_page_fault(unsigned long far, unsigned int esr,
 			vm_flags |= VM_EXEC;
 	}
 
+	/* 判断异常地址是否发生在用户空间，小于TASK_SIZE的地址是用户空间的地址。
+	 * 判断访问权限问题是否发生在EL1中。当这两个条件都满足时，说明这是一个
+	 * 比较少见的特殊情况
+	 * */
 	if (is_ttbr0_addr(addr) && is_el1_permission_fault(addr, esr, regs)) {
+		/* 确认是EL1的指令异常 */
 		if (is_el1_instruction_abort(esr))
 			die_kernel_fault("execution of user memory",
 					 addr, esr, regs);
 
+		/* 在异常表(exception table)找不到合适的处理函数 */
 		if (!search_exception_tables(regs->pc))
 			die_kernel_fault("access to user memory outside uaccess routines",
 					 addr, esr, regs);
@@ -577,7 +608,18 @@ static int __kprobes do_page_fault(unsigned long far, unsigned int esr,
 	 * validly references user space from well defined areas of the code,
 	 * we can bug out early if this is from code which shouldn't.
 	 */
+	/* 在上述判断完成后，我们可以断定缺页异常没有发生在中断上下文，内核线程以及一些特殊情况
+	 * 下，接下来，就要检查由进程地址空间而引发的缺页异常，因此我们需要获取进程内存描述符的
+	 * 读写信号量进行保护。什么时候会获取不到这个锁，例如其他线程已经提前获取了该进程的写者
+	 * 类型的锁，如brk申请堆空间、mmap进程内存映射等操作。
+	 * */
 	if (!mmap_read_trylock(mm)) {
+		/* 锁被人占用主要分两种情况，一种是发生在用户空间，此时可以调用down_read来睡眠。
+		 * 另一种是发生在内核空间。内核一般不会随意访问用户地址空间，只有少数几个函数，
+		 * 如copy_to_user，为了防止访问错误的地址空间，内核为每处代码设置了出错修正地址
+		 * (见异常表)。因此，当发生在内核空间并且在异常表没有查询到该地址时，就跳转
+		 * no_context标签处执行，就 kernel_fault。
+		 * */
 		if (!user_mode(regs) && !search_exception_tables(regs->pc))
 			goto no_context;
 retry:
@@ -596,6 +638,7 @@ retry:
 #endif
 	}
 
+	/* 函数会返回处理结果到fault中，我们根据fault做不同处理 */
 	fault = __do_page_fault(mm, addr, mm_flags, vm_flags, regs);
 
 	/* Quick path to respond to signals */
@@ -605,17 +648,20 @@ retry:
 		return 0;
 	}
 
+	/* 处理需要重试的情况 */
 	if (fault & VM_FAULT_RETRY) {
 		if (mm_flags & FAULT_FLAG_ALLOW_RETRY) {
 			mm_flags |= FAULT_FLAG_TRIED;
 			goto retry;
 		}
 	}
+	/* 释放锁 */
 	mmap_read_unlock(mm);
 
 	/*
 	 * Handle the "normal" (no error) case first.
 	 */
+	/* 处理正常的情况 */
 	if (likely(!(fault & (VM_FAULT_ERROR | VM_FAULT_BADMAP |
 			      VM_FAULT_BADACCESS))))
 		return 0;
@@ -624,6 +670,7 @@ retry:
 	 * If we are in kernel mode at this point, we have no context to
 	 * handle this fault with.
 	 */
+	/* 在内核下触发的，直接kernel fault dump出去，平常我们写空指针之类，应该就在这处理 */
 	if (!user_mode(regs))
 		goto no_context;
 
@@ -739,15 +786,18 @@ static int do_tag_check_fault(unsigned long far, unsigned int esr,
 }
 
 static const struct fault_info fault_info[] = {
+	/* 处理与未知的错误或者硬件相关的错误，如TLB冲突等 */
 	{ do_bad,		SIGKILL, SI_KERNEL,	"ttbr address size fault"	},
 	{ do_bad,		SIGKILL, SI_KERNEL,	"level 1 address size fault"	},
 	{ do_bad,		SIGKILL, SI_KERNEL,	"level 2 address size fault"	},
 	{ do_bad,		SIGKILL, SI_KERNEL,	"level 3 address size fault"	},
+	/* 处理与页表转换相关的异常错误 */
 	{ do_translation_fault,	SIGSEGV, SEGV_MAPERR,	"level 0 translation fault"	},
 	{ do_translation_fault,	SIGSEGV, SEGV_MAPERR,	"level 1 translation fault"	},
 	{ do_translation_fault,	SIGSEGV, SEGV_MAPERR,	"level 2 translation fault"	},
 	{ do_translation_fault,	SIGSEGV, SEGV_MAPERR,	"level 3 translation fault"	},
 	{ do_bad,		SIGKILL, SI_KERNEL,	"unknown 8"			},
+	/* 处理与页表访问或者权限相关的异常错误 */
 	{ do_page_fault,	SIGSEGV, SEGV_ACCERR,	"level 1 access flag fault"	},
 	{ do_page_fault,	SIGSEGV, SEGV_ACCERR,	"level 2 access flag fault"	},
 	{ do_page_fault,	SIGSEGV, SEGV_ACCERR,	"level 3 access flag fault"	},
@@ -772,6 +822,7 @@ static const struct fault_info fault_info[] = {
 	{ do_sea,		SIGKILL, SI_KERNEL,	"level 2 synchronous parity error (translation table walk)"	},	// Reserved when RAS is implemented
 	{ do_sea,		SIGKILL, SI_KERNEL,	"level 3 synchronous parity error (translation table walk)"	},	// Reserved when RAS is implemented
 	{ do_bad,		SIGKILL, SI_KERNEL,	"unknown 32"			},
+	/* 处理与对齐相关的异常错误 */
 	{ do_alignment_fault,	SIGBUS,  BUS_ADRALN,	"alignment fault"		},
 	{ do_bad,		SIGKILL, SI_KERNEL,	"unknown 34"			},
 	{ do_bad,		SIGKILL, SI_KERNEL,	"unknown 35"			},

@@ -156,8 +156,11 @@ struct irq_domain_chip_generic;
  * @revmap: Linear table of irq_data pointers
  */
 struct irq_domain {
+	/* 用于将 irq_domain 链接到全局链表 irq_domain_list 中 */
 	struct list_head link;
+	/* irq_domain 名称 */
 	const char *name;
+	/* irq_domain 映射操作使用的方法集合 */
 	const struct irq_domain_ops *ops;
 	void *host_data;
 	unsigned int flags;
@@ -172,8 +175,11 @@ struct irq_domain {
 #endif
 
 	/* reverse map data. The linear map gets appended to the irq_domain */
+	/* 该 irq_domain 支持中断数量的最大值 */
 	irq_hw_number_t hwirq_max;
+	/* 线性映射的大小 */
 	unsigned int revmap_size;
+	/* 基数数映射的根节点 */
 	struct radix_tree_root revmap_tree;
 	struct mutex revmap_mutex;
 	struct irq_data __rcu *revmap[];

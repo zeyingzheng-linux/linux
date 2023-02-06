@@ -62,6 +62,7 @@ static inline void rb_link_node(struct rb_node *node, struct rb_node *parent,
 	node->__rb_parent_color = (unsigned long)parent;
 	node->rb_left = node->rb_right = NULL;
 
+	/* node是新插入的节点，而rb_link是要插入的节点指针本身的地址 */
 	*rb_link = node;
 }
 

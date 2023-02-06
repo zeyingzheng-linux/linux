@@ -350,6 +350,7 @@ UNHANDLED(el1t, 64, error)
 
 static void noinstr el1_abort(struct pt_regs *regs, unsigned long esr)
 {
+	/* Fault Address Register: 保存了发生异常的虚拟地址 */
 	unsigned long far = read_sysreg(far_el1);
 
 	enter_from_kernel_mode(regs);
@@ -400,6 +401,15 @@ static void noinstr el1_fpac(struct pt_regs *regs, unsigned long esr)
 
 asmlinkage void noinstr el1h_64_sync_handler(struct pt_regs *regs)
 {
+	/* Exception Syndrome Register: EC指出异常类似，在指定EC后，ISS
+	 * 是具体的异常指令编码，每种异常都有自己的意义，举例子，mem_abort
+	 * 来说的话，ISS里面有一个DFSC[5:0]指定了数据异常的状态原因等，有个WnR
+	 * bit[6]指明异常的发生是 对一个内存区域执行了读还是写 这样的信息。
+	 * ISS(Instruction Specifilc Syndrome): bit[24:0]
+	 * IL:bit[25] 表示同步异常的指令长度
+	 * EC:bit[26:31] 表示异常类型
+	 * bit[63:32] 保留的位
+	 * */
 	unsigned long esr = read_sysreg(esr_el1);
 
 	switch (ESR_ELx_EC(esr)) {
@@ -604,6 +614,7 @@ static void noinstr el0_fpac(struct pt_regs *regs, unsigned long esr)
 	exit_to_user_mode(regs);
 }
 
+/* kernel_ventry -> entry_handler */
 asmlinkage void noinstr el0t_64_sync_handler(struct pt_regs *regs)
 {
 	unsigned long esr = read_sysreg(esr_el1);

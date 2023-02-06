@@ -1348,8 +1348,13 @@ EXPORT_SYMBOL_GPL(irq_wake_thread);
 
 static int irq_setup_forced_threading(struct irqaction *new)
 {
+	/* 1. 打开 CONFIG_IRQ_FORCED_THREADING
+	 * 2. 内核启动参数包含 threadirqs
+	 * 两个条件都成立则 force_irqthreads 返回true，表示强制中断线程化
+	 * */
 	if (!force_irqthreads())
 		return 0;
+	/* 但凡有一个成立，则不符合中断线程化要求 */
 	if (new->flags & (IRQF_NO_THREAD | IRQF_PERCPU | IRQF_ONESHOT))
 		return 0;
 
@@ -1360,6 +1365,7 @@ static int irq_setup_forced_threading(struct irqaction *new)
 	if (new->handler == irq_default_primary_handler)
 		return 0;
 
+	/* 保证所有线程化后的 thread_fn 都运行完成后才打开中断源 */
 	new->flags |= IRQF_ONESHOT;
 
 	/*
@@ -1496,6 +1502,9 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 	if (!desc)
 		return -EINVAL;
 
+	/* 说明没有正确初始化，对GIC-V2的控制器来说，它在 gic_irq_domain_alloc
+	 * 函数中就指定 chip 指针指向该中断控制器的 giv_chip 数据结构了
+	 * */
 	if (desc->irq_data.chip == &no_irq_chip)
 		return -ENOSYS;
 	if (!try_module_get(desc->owner))
@@ -1516,6 +1525,10 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 	 */
 	nested = irq_settings_is_nested_thread(desc);
 	if (nested) {
+		/* 对于设置了 _IRQ_NESTED_THREAD 类型的中断描述符，驱动程序注册中断时
+		 * 应该指定中断线程化处理程序 thread_fn。嵌套类型的中断没有主处理程序
+		 * 这里使 handler 指向了 irq_nested_primary_handler，它只输出一句话
+		 * */
 		if (!new->thread_fn) {
 			ret = -EINVAL;
 			goto out_mput;
@@ -1559,6 +1572,8 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 	 * chip flags, so we can avoid the unmask dance at the end of
 	 * the threaded handler for those.
 	 */
+	/* 该标志位表示该中断控制器不支持嵌套，即只支持ONESHOT，如基于MSI的中断
+	 * 因此可以删除掉驱动注册的 IRQF_ONESHOT 标志 */
 	if (desc->irq_data.chip->flags & IRQCHIP_ONESHOT_SAFE)
 		new->flags &= ~IRQF_ONESHOT;
 
@@ -1597,6 +1612,7 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 	raw_spin_lock_irqsave(&desc->lock, flags);
 	old_ptr = &desc->action;
 	old = *old_ptr;
+	/* old不为空，证明之前已经有人挂到 action 链表了，换句话说这是个共享中断 */
 	if (old) {
 		/*
 		 * Can't share interrupts unless both agree to and are
@@ -1643,6 +1659,7 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 			 * so we can find the next zero bit for this
 			 * new action.
 			 */
+			/* 遍历共享中断，取得 thread_mask，为下面set thread_mask做准备 */
 			thread_mask |= old->thread_mask;
 			old_ptr = &old->next;
 			old = *old_ptr;
@@ -1688,6 +1705,19 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 
 	} else if (new->handler == irq_default_primary_handler &&
 		   !(desc->irq_data.chip->flags & IRQCHIP_ONESHOT_SAFE)) {
+		/*
+		 * 通常来讲，如果是电平触发的中断，当中断 asserted 了之后，我们是在
+		 * 中断处理程序里面，操作外设寄存器尽早的clear interrupt。但是对于
+		 * 默认的irq_default_primary_handler ，它仅仅是return值达到唤醒目的，
+		 * 并没有clear interrupt ，这样执行完处理程序，外设中断仍然是 asserted的
+		 * 一旦打开CPU中断，立刻触发下一次中断，不断循环，就是所谓中断风暴。
+		 * 但如果底层的irq chip是 one shot safe的，即本身就支持 oneshot功能的，
+		 * 那么就可以这么干。
+		 *
+		 * 所以这就告诉我们，在使用 request_threaded_irq 注册中断时，如果没有
+		 * 指定主处理程序，并且中断控制器不支持oneshot功能，那么必须显式指定
+		 * IRQF_ONESHOT中断标志位。
+		 * */
 		/*
 		 * The interrupt was requested with handler = NULL, so
 		 * we use the default primary handler for it. But it
@@ -1782,6 +1812,7 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 				irq, omsk, nmsk);
 	}
 
+	/* 挂入 action 链表 */
 	*old_ptr = new;
 
 	irq_pm_install_action(desc, new);
@@ -1805,6 +1836,7 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 
 	irq_setup_timings(desc, new);
 
+	/* 唤醒中断线程，注意是每个中断对应线程，不是每个CPU对应 */
 	wake_up_and_wait_for_irq_thread_ready(desc, new);
 	wake_up_and_wait_for_irq_thread_ready(desc, new->secondary);
 
@@ -2128,6 +2160,13 @@ const void *free_nmi(unsigned int irq, void *dev_id)
  *	IRQF_TRIGGER_*		Specify active edge(s) or level
  *	IRQF_ONESHOT		Run thread_fn with interrupt line masked
  */
+/* 1. 如果 handler == NULL，且 thread_fn != NULL，那么会执行系统默认的主处理程序
+ *    irq_default_primary_handler 函数
+ * 2. 如果 thread_fn != NULL，那么会创建一个内核线程。primary handler 和 thread_fn
+ *    不能同时为NULL。
+ * 3. 如果 handler != NULL && thread_fn != NULL，那么 handler 由义务返回IRQ_WAKE_THREAD
+ *    去唤醒 thread_fn
+ * */
 int request_threaded_irq(unsigned int irq, irq_handler_t handler,
 			 irq_handler_t thread_fn, unsigned long irqflags,
 			 const char *devname, void *dev_id)
@@ -2152,20 +2191,29 @@ int request_threaded_irq(unsigned int irq, irq_handler_t handler,
 	 * Also IRQF_COND_SUSPEND only makes sense for shared interrupts and
 	 * it cannot be set along with IRQF_NO_SUSPEND.
 	 */
+	/* 共享中断需要 dev_id 这个参数传给它，不然没法区分是否自己的中断发生了 */
 	if (((irqflags & IRQF_SHARED) && !dev_id) ||
 	    ((irqflags & IRQF_SHARED) && (irqflags & IRQF_NO_AUTOEN)) ||
 	    (!(irqflags & IRQF_SHARED) && (irqflags & IRQF_COND_SUSPEND)) ||
 	    ((irqflags & IRQF_NO_SUSPEND) && (irqflags & IRQF_COND_SUSPEND)))
 		return -EINVAL;
 
+	/* 通过虚拟中断号获取中断描述符，中断描述符是在软硬件中断号转化过程中就分配了 */
 	desc = irq_to_desc(irq);
 	if (!desc)
 		return -EINVAL;
 
+	/* 设置了 _IRQ_NOREQUEST 的描述符是系统预留的描述符，外设不可以使用这些中断描述符
+	 * 设置了 _IRQ_PER_CPU_DEVID的描述符是预留给 IRQF_PERCPU 类型的中断的，使用
+	 * request_percpu_irq 函数注册中断
+	 * */
 	if (!irq_settings_can_request(desc) ||
 	    WARN_ON(irq_settings_is_per_cpu_devid(desc)))
 		return -EINVAL;
 
+	/* handler和thread_fn不能同时为NULL，当主处理程序为NULL，而 thread_fn不为NULL时
+	 * 有默认的主处理函数，它直接返回IRQ_WAKE_THREAD，表示要唤醒中断线程
+	 * */
 	if (!handler) {
 		if (!thread_fn)
 			return -EINVAL;

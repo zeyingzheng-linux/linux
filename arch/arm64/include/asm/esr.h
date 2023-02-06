@@ -10,59 +10,91 @@
 #include <asm/memory.h>
 #include <asm/sysreg.h>
 
+/* 未知的异常错误 */
 #define ESR_ELx_EC_UNKNOWN	(0x00)
+/* 陷入WFI或者WFE指令的执行 */
 #define ESR_ELx_EC_WFx		(0x01)
 /* Unallocated EC: 0x02 */
+/* 陷入MCR或者MRC访问  */
 #define ESR_ELx_EC_CP15_32	(0x03)
+/* 陷入MCRR或者MRRC访问 */
 #define ESR_ELx_EC_CP15_64	(0x04)
+/* 陷入MCR或者MRC访问  */
 #define ESR_ELx_EC_CP14_MR	(0x05)
+/* 陷入LDC或者STC访问 */
 #define ESR_ELx_EC_CP14_LS	(0x06)
+/* 访问SVE、高级SIMD或者浮点运算功能 */
 #define ESR_ELx_EC_FP_ASIMD	(0x07)
 #define ESR_ELx_EC_CP10_ID	(0x08)	/* EL2 only */
 #define ESR_ELx_EC_PAC		(0x09)	/* EL2 and above */
 /* Unallocated EC: 0x0A - 0x0B */
 #define ESR_ELx_EC_CP14_64	(0x0C)
 #define ESR_ELx_EC_BTI		(0x0D)
+/* 非法的执行状态 */
 #define ESR_ELx_EC_ILL		(0x0E)
 /* Unallocated EC: 0x0F - 0x10 */
+/* 在AArch32状态下执行SVC指令导致的异常 */
 #define ESR_ELx_EC_SVC32	(0x11)
+/* 在AArch32状态下执行HVC指令导致的异常 */
 #define ESR_ELx_EC_HVC32	(0x12)	/* EL2 only */
 #define ESR_ELx_EC_SMC32	(0x13)	/* EL2 and above */
 /* Unallocated EC: 0x14 */
+/* 在AArch64状态下执行SVC指令导致的异常 */
 #define ESR_ELx_EC_SVC64	(0x15)
+/* 在AArch64状态下执行HVC指令导致的异常 */
 #define ESR_ELx_EC_HVC64	(0x16)	/* EL2 and above */
 #define ESR_ELx_EC_SMC64	(0x17)	/* EL2 and above */
+/* 在AArch64状态下执行MSR、MRS或者系统指令导致的异常 */
 #define ESR_ELx_EC_SYS64	(0x18)
+/* 访问SVE功能 */
 #define ESR_ELx_EC_SVE		(0x19)
 #define ESR_ELx_EC_ERET		(0x1a)	/* EL2 only */
 /* Unallocated EC: 0x1B */
 #define ESR_ELx_EC_FPAC		(0x1C)	/* EL1 and above */
 /* Unallocated EC: 0x1D - 0x1E */
 #define ESR_ELx_EC_IMP_DEF	(0x1f)	/* EL3 only */
+/* 来自低级别的异常等级的指令异常 */
 #define ESR_ELx_EC_IABT_LOW	(0x20)
+/* 来自当前异常等级的指令异常 */
 #define ESR_ELx_EC_IABT_CUR	(0x21)
+/* PC指针没对齐导致的异常 */
 #define ESR_ELx_EC_PC_ALIGN	(0x22)
 /* Unallocated EC: 0x23 */
+/* 来自低级别的异常等级的数据异常 */
 #define ESR_ELx_EC_DABT_LOW	(0x24)
+/* 来自当前异常等级的数据异常 */
 #define ESR_ELx_EC_DABT_CUR	(0x25)
+/* SP指令没对齐导致的异常 */
 #define ESR_ELx_EC_SP_ALIGN	(0x26)
 /* Unallocated EC: 0x27 */
+/* 在AArch32状态下的浮点运算导致的异常 */
 #define ESR_ELx_EC_FP_EXC32	(0x28)
 /* Unallocated EC: 0x29 - 0x2B */
+/* 在AArch64状态下的浮点运算导致的异常 */
 #define ESR_ELx_EC_FP_EXC64	(0x2C)
 /* Unallocated EC: 0x2D - 0x2E */
+/* 系统错误 */
 #define ESR_ELx_EC_SERROR	(0x2F)
+/* 来自低级别的异常等级的断点异常 */
 #define ESR_ELx_EC_BREAKPT_LOW	(0x30)
+/* 来自当前异常等级的断点异常 */
 #define ESR_ELx_EC_BREAKPT_CUR	(0x31)
+/* 来自低级别的异常等级的软件单步(software step exception)异常 */
 #define ESR_ELx_EC_SOFTSTP_LOW	(0x32)
+/* 来自当前异常等级的软件单步(software step exception)异常 */
 #define ESR_ELx_EC_SOFTSTP_CUR	(0x33)
+/* 来自低级别的异常等级的观察点(watchpoint exception)异常 */
 #define ESR_ELx_EC_WATCHPT_LOW	(0x34)
+/* 来自当前异常等级的观察点(watchpoint exception)异常 */
 #define ESR_ELx_EC_WATCHPT_CUR	(0x35)
 /* Unallocated EC: 0x36 - 0x37 */
+/* 在AArch32状态下BKPT指令导致的异常 */
 #define ESR_ELx_EC_BKPT32	(0x38)
 /* Unallocated EC: 0x39 */
 #define ESR_ELx_EC_VECTOR32	(0x3A)	/* EL2 only */
 /* Unallocated EC: 0x3B */
+/* 在AArch64状态下BKPT指令导致的异常 */
+#define ESR_ELx_EC_BKPT32	(0x38)
 #define ESR_ELx_EC_BRK64	(0x3C)
 /* Unallocated EC: 0x3D - 0x3F */
 #define ESR_ELx_EC_MAX		(0x3F)
@@ -77,6 +109,8 @@
 #define ESR_ELx_ISS_MASK	(ESR_ELx_IL - 1)
 
 /* ISS field definitions shared by different classes */
+/* 0: 异常发生的原因是读内存区域
+ * 1: 异常发生的原因是写内存区域 */
 #define ESR_ELx_WNR_SHIFT	(6)
 #define ESR_ELx_WNR		(UL(1) << ESR_ELx_WNR_SHIFT)
 
@@ -93,12 +127,17 @@
 #define ESR_ELx_AET_CE		(UL(6) << ESR_ELx_AET_SHIFT)
 
 /* Shared ISS field definitions for Data/Instruction aborts */
+/* 同步错误类型 */
 #define ESR_ELx_SET_SHIFT	(11)
 #define ESR_ELx_SET_MASK	(UL(3) << ESR_ELx_SET_SHIFT)
+/* FAR地址是无效的 */
 #define ESR_ELx_FnV_SHIFT	(10)
 #define ESR_ELx_FnV		(UL(1) << ESR_ELx_FnV_SHIFT)
+/* 外部异常类型 */
 #define ESR_ELx_EA_SHIFT	(9)
 #define ESR_ELx_EA		(UL(1) << ESR_ELx_EA_SHIFT)
+/* 0: 异常不来自从阶段2到阶段1的页表转换
+ * 1: 异常来自从阶段2到阶段1的页表转换 */
 #define ESR_ELx_S1PTW_SHIFT	(7)
 #define ESR_ELx_S1PTW		(UL(1) << ESR_ELx_S1PTW_SHIFT)
 
@@ -114,18 +153,31 @@
 #define ESR_ELx_FSC_PERM	(0x0C)
 
 /* ISS field definitions for Data Aborts */
+/* 有效位 */
 #define ESR_ELx_ISV_SHIFT	(24)
 #define ESR_ELx_ISV		(UL(1) << ESR_ELx_ISV_SHIFT)
+/* 访问大小 */
 #define ESR_ELx_SAS_SHIFT	(22)
 #define ESR_ELx_SAS		(UL(3) << ESR_ELx_SAS_SHIFT)
+/* 综合签名扩展 */
 #define ESR_ELx_SSE_SHIFT	(21)
 #define ESR_ELx_SSE		(UL(1) << ESR_ELx_SSE_SHIFT)
+/* 综合寄存器转移 */
 #define ESR_ELx_SRT_SHIFT	(16)
 #define ESR_ELx_SRT_MASK	(UL(0x1F) << ESR_ELx_SRT_SHIFT)
+/* 指令宽度
+ * 0: 加载和存储32位宽的寄存器
+ * 1: 加载和存储64位宽的寄存器
+ * */
 #define ESR_ELx_SF_SHIFT	(15)
 #define ESR_ELx_SF 		(UL(1) << ESR_ELx_SF_SHIFT)
+/* 获取/释放 */
 #define ESR_ELx_AR_SHIFT	(14)
 #define ESR_ELx_AR 		(UL(1) << ESR_ELx_AR_SHIFT)
+/*
+ * 0: 异常不来自高速缓存维护等相关指令
+ * 1: 异常发生于执行高速缓存维护等相关指令或者执行地址转换指令时
+ */
 #define ESR_ELx_CM_SHIFT	(8)
 #define ESR_ELx_CM 		(UL(1) << ESR_ELx_CM_SHIFT)
 

@@ -68,21 +68,38 @@
  * IRQF_NO_DEBUG - Exclude from runnaway detection for IPI and similar handlers,
  *		   depends on IRQF_PERCPU.
  */
+/* 多设备共享一个中断号。所以每个设备中断处理程序需
+ * 判断是否自己的中断产生了，会带来一定延迟，不推荐
+ * */
 #define IRQF_SHARED		0x00000080
+/* 中断处理程序允许出现共享中断不匹配的情况 */
 #define IRQF_PROBE_SHARED	0x00000100
 #define __IRQF_TIMER		0x00000200
+/* 属于特定某个CPU的中断 */
 #define IRQF_PERCPU		0x00000400
+/* 禁止多CPU之间的中断均衡 */
 #define IRQF_NOBALANCING	0x00000800
+/* 中断被用作轮询 */
 #define IRQF_IRQPOLL		0x00001000
+/* 表示一次性触发的中断，不能嵌套
+ * 1. 在硬件中断处理完成之后才能打开中断
+ * 2. 在中断线程化中保持中断关闭状态，直到该中断源上的所有 thread_fn 完成之后才能打开中断
+ * 3. 如果执行 request_threaded_irq 时，主处理程序是NULL且中断控制器不支持硬件ONESHOT功能
+ * ，那应该显式地设置这个标志
+ * */
 #define IRQF_ONESHOT		0x00002000
+/* 在系统睡眠过程中不要关闭该中断 */
 #define IRQF_NO_SUSPEND		0x00004000
+/* 在系统唤醒过程中必须强制打开该中断 */
 #define IRQF_FORCE_RESUME	0x00008000
+/* 表示该中断不会被线程化 */
 #define IRQF_NO_THREAD		0x00010000
 #define IRQF_EARLY_RESUME	0x00020000
 #define IRQF_COND_SUSPEND	0x00040000
 #define IRQF_NO_AUTOEN		0x00080000
 #define IRQF_NO_DEBUG		0x00100000
 
+/* 标记一个时钟中断 */
 #define IRQF_TIMER		(__IRQF_TIMER | IRQF_NO_SUSPEND | IRQF_NO_THREAD)
 
 /*

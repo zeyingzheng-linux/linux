@@ -48,6 +48,11 @@ struct pt_regs;
 
 #endif /* CONFIG_COMPAT */
 
+/* arch/arm64/kernel/sys.c
+ * include/uapi/asm-generic/unistd.h
+ * arch/arm64/kernel/syscall.c
+ * */
+
 #define __SYSCALL_DEFINEx(x, name, ...)						\
 	asmlinkage long __arm64_sys##name(const struct pt_regs *regs);		\
 	ALLOW_ERROR_INJECTION(__arm64_sys##name, ERRNO);			\

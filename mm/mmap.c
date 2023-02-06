@@ -191,6 +191,25 @@ static struct vm_area_struct *remove_vma(struct vm_area_struct *vma)
 
 static int do_brk_flags(unsigned long addr, unsigned long request, unsigned long flags,
 		struct list_head *uf);
+/*
+ *
+ *
+ * newbrk   ---------------- PAGE_ALIGN
+ *
+ *
+ *
+ * brk2     --------
+ *
+ * oldbrk   ---------------- PAGE_ALIGN
+ *
+ * brk1     --------
+ *
+ * origbrk  --------
+ *
+ * brkpage  ---------------- PAGE_ALIGN
+ *
+ * */
+/* brk只需要一个参数，用于指定堆在虚拟地址空间中新的结束地址，即下面说的底部 */
 SYSCALL_DEFINE1(brk, unsigned long, brk)
 {
 	unsigned long newbrk, oldbrk, origbrk;
@@ -201,9 +220,11 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 	bool downgraded = false;
 	LIST_HEAD(uf);
 
+	/* 申请写者类型的读写信号量，因为后续要修改进程的地址空间 */
 	if (mmap_write_lock_killable(mm))
 		return -EINTR;
 
+	/* mm 描述符里面有一个brk成员，记录动态分配区的当前底部(结束地址) */
 	origbrk = mm->brk;
 
 #ifdef CONFIG_COMPAT_BRK
@@ -217,6 +238,7 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 	else
 		min_brk = mm->end_data;
 #else
+	/* mm 描述符里面有一个start_brk成员，记录动态分配区的起始地址 */
 	min_brk = mm->start_brk;
 #endif
 	if (brk < min_brk)
@@ -228,12 +250,18 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 	 * segment grow beyond its set limit the in case where the limit is
 	 * not page aligned -Ram Gupta
 	 */
+	/* 堆的扩展不能无限制 */
 	if (check_data_rlimit(rlimit(RLIMIT_DATA), brk, mm->start_brk,
 			      mm->end_data, mm->start_data))
 		goto out;
 
+	/* newbrk表示brk要求的新边界地址，是用户进程要求分配内存的大小与当前动态分区
+	 * 底部边界地址的和，向上对齐 */
 	newbrk = PAGE_ALIGN(brk);
+	/* oldbrk表示当前动态分配区的当前底部边界地址 */
 	oldbrk = PAGE_ALIGN(mm->brk);
+	/* 因为我们都是按照页分配的，更小的单元分配交给了标准库，所以如果它们相等
+	 * 证明我们需要的那一页起始已经给出去了，只需要调整一下brk，然后告诉上层即可*/
 	if (oldbrk == newbrk) {
 		mm->brk = brk;
 		goto success;
@@ -243,6 +271,9 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 	 * Always allow shrinking brk.
 	 * __do_munmap() may downgrade mmap_lock to read.
 	 */
+	/* 如果新边界地址小于旧边界地址，那么表示进程请求释放空间
+	 * 调用 do_munmap，来释放这一部分空间的内存
+	 * */
 	if (brk <= mm->brk) {
 		int ret;
 
@@ -263,11 +294,15 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 	}
 
 	/* Check against existing mmap mappings. */
+	/* 其实就是 find_vma_intersection(mm, oldbrk, newbrk + PAGE_SIZE)
+	 * 这就是找一下扩展的堆是否与进程中现有的映射重叠了，如果重叠就不找了
+	 * 因为已经在使用，但是为什么 newbrk 还要加上 PAGE_SIZE 才能达到目的呢？*/
 	next = find_vma(mm, oldbrk);
 	if (next && newbrk + PAGE_SIZE > vm_start_gap(next))
 		goto out;
 
 	/* Ok, looks good - let it rip. */
+	/* 接下来真的需要分配一个VMA了，newbrk-oldbrk的长度可能是一页也可以多页 */
 	if (do_brk_flags(oldbrk, newbrk-oldbrk, 0, &uf) < 0)
 		goto out;
 	mm->brk = brk;
@@ -279,12 +314,18 @@ success:
 	else
 		mmap_write_unlock(mm);
 	userfaultfd_unmap_complete(mm, &uf);
+	/* 应用程序可以使用mlockall() 系统调用来把进程中全部的进程虚拟地址空间加锁，
+	 * 防止内存被交换出去。因此这时的 mm->def_flags 就会设置 VM_LOCKED 标志位，
+	 * 调用 mm_populate 函数来立刻分配物理内存，而且主要会锁住不交换出去。
+	 * */
 	if (populate)
 		mm_populate(oldbrk, newbrk - oldbrk);
+	/* 返回传进来的brk */
 	return brk;
 
 out:
 	mmap_write_unlock(mm);
+	/* 返回原本的brk */
 	return origbrk;
 }
 
@@ -526,6 +567,7 @@ anon_vma_interval_tree_post_update_vma(struct vm_area_struct *vma)
 		anon_vma_interval_tree_insert(avc, &avc->anon_vma->rb_root);
 }
 
+/* 为新VMA查找合适的插入位置 */
 static int find_vma_links(struct mm_struct *mm, unsigned long addr,
 		unsigned long end, struct vm_area_struct **pprev,
 		struct rb_node ***rb_link, struct rb_node **rb_parent)
@@ -544,11 +586,14 @@ static int find_vma_links(struct mm_struct *mm, unsigned long addr,
 
 		if (vma_tmp->vm_end > addr) {
 			/* Fail if an existing vma overlaps the area */
+			/* 待插入的VMA和现有的VMA有重叠了，返回错误码 */
 			if (vma_tmp->vm_start < end)
 				return -ENOMEM;
+			/* 待插入的VMA小了，往左子树找 */
 			__rb_link = &__rb_parent->rb_left;
 		} else {
 			rb_prev = __rb_parent;
+			/* 待插入的VMA大了，往右子树找 */
 			__rb_link = &__rb_parent->rb_right;
 		}
 	}
@@ -556,7 +601,12 @@ static int find_vma_links(struct mm_struct *mm, unsigned long addr,
 	*pprev = NULL;
 	if (rb_prev)
 		*pprev = rb_entry(rb_prev, struct vm_area_struct, vm_rb);
+	/* *rb_link 指向待插入节点指针本身的地址，所以此处用三级指针，它自己里面是NULL
+	 * 见 include/linux/rbtree.h : rb_link_node 。你觉得可以用二级指针来实现嘛
+	 * zzy 思考
+	 * */
 	*rb_link = __rb_link;
+	/* *rb_parent 指向父亲节点，所以此处用二级指针 */
 	*rb_parent = __rb_parent;
 	return 0;
 }
@@ -600,6 +650,8 @@ munmap_vma_range(struct mm_struct *mm, unsigned long start, unsigned long len,
 {
 
 	while (find_vma_links(mm, start, start + len, pprev, link, parent))
+		/* find_vma_links 返回-ENOMEM，代表和现有的VMA重叠，所以会调用
+		 * do_munmap释放这段重叠的空间，返回0，代表找到合适插入的位置 */
 		if (do_munmap(mm, start, len, uf))
 			return -ENOMEM;
 
@@ -679,7 +731,9 @@ __vma_link(struct mm_struct *mm, struct vm_area_struct *vma,
 	struct vm_area_struct *prev, struct rb_node **rb_link,
 	struct rb_node *rb_parent)
 {
+	/* 把VMA添加到 mm->mmap 链表中 */
 	__vma_link_list(mm, vma, prev);
+	/* 把VMA插入到红黑树中 */
 	__vma_link_rb(mm, vma, rb_link, rb_parent);
 }
 
@@ -694,7 +748,9 @@ static void vma_link(struct mm_struct *mm, struct vm_area_struct *vma,
 		i_mmap_lock_write(mapping);
 	}
 
+	/* 将节点添加到红黑树和链表中 */
 	__vma_link(mm, vma, prev, rb_link, rb_parent);
+	/* 把VMA添加到文件的基数树上 */
 	__vma_link_file(vma);
 
 	if (mapping)
@@ -1155,6 +1211,14 @@ can_vma_merge_after(struct vm_area_struct *vma, unsigned long vm_flags,
  * parameter) may establish ptes with the wrong permissions of NNNN
  * instead of the right permissions of XXXX.
  */
+/* 实现将一个新的VMA和附近的VMA合并的功能
+ * prev: 紧接着新VMA前继节点的VMA，一般通过find_vma_links函数来获取
+ * addr,end: 新VMA的起始地址和结束地址
+ * vm_flags: 新VMA的标志位
+ * anon_vma: 匿名映射的anon_vma数据结构
+ * file: 如果新VMA属于一个文件映射，则file指向文件的file数据结构
+ * proff:如果新VMA属于一个文件映射，则proff指定文件映射的偏移量
+ * */
 struct vm_area_struct *vma_merge(struct mm_struct *mm,
 			struct vm_area_struct *prev, unsigned long addr,
 			unsigned long end, unsigned long vm_flags,
@@ -1173,6 +1237,8 @@ struct vm_area_struct *vma_merge(struct mm_struct *mm,
 	if (vm_flags & VM_SPECIAL)
 		return NULL;
 
+	/* 如果新插入的节点有前继节点，那么next指向prev->vma_next，否则
+	 * 指向mm->mmap的第一个节点，zzy链表的用法 */
 	next = vma_next(mm, prev);
 	area = next;
 	if (area && area->vm_end == end)		/* cases 6, 7, 8 */
@@ -1186,6 +1252,20 @@ struct vm_area_struct *vma_merge(struct mm_struct *mm,
 	/*
 	 * Can it merge with the predecessor?
 	 */
+	/* 判断是否可以和前继节点合并，如果新插入节点的起始地址和prev的
+	 * 结束地址相等，就满足第一个条件
+	 * can_vma_merge_after 判断prev节点是否可以被合并
+	 * 最终合并是在 __vma_adjust 函数中实现的，它会适当的修改所涉及
+	 * 的数据结构，例如VMA等，最后会释放不在需要的VMA
+	 *
+	 * 除了这段，下面一段判断与后继节点是否可以合并，理想情况下，若
+	 * 新插入的节点的计数地址等于next节点的起始地址，那么节点prev和
+	 * next可以合并在一起的。所以可以合并就三种情况
+	 * 1. 新VMA的起始地址和prev节点结束地址重叠
+	 * 2. 新VMA的结束地址和next节点起始地址重叠
+	 * 3. 新VMA和prev和next节点正好衔接上
+	 * 最后都不满足的话，就是没法合并了
+	 * */
 	if (prev && prev->vm_end == addr &&
 			mpol_equal(vma_policy(prev), policy) &&
 			can_vma_merge_after(prev, vm_flags,
@@ -1218,6 +1298,8 @@ struct vm_area_struct *vma_merge(struct mm_struct *mm,
 	/*
 	 * Can this new request be merged in front of next?
 	 */
+	/* 判断是否可以和后继节点合并
+	 * */
 	if (next && end == next->vm_start &&
 			mpol_equal(policy, vma_policy(next)) &&
 			can_vma_merge_before(next, vm_flags,
@@ -2268,6 +2350,11 @@ get_unmapped_area(struct file *file, unsigned long addr, unsigned long len,
 EXPORT_SYMBOL(get_unmapped_area);
 
 /* Look up the first VMA which satisfies  addr < vm_end,  NULL if none. */
+/* 寻找一个VMA，满足以下任一一个条件即可，条件1的优先级高于条件2
+ * 1. vma->vm_start <= addr <= vma->vm_end
+ * 2. 距离addr最近并且VMA的结束地址大于addr的VMA
+ * 总结起来，起始也可以就只是一个条件，那就是 addr < vma->vm_end
+ * */
 struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
 {
 	struct rb_node *rb_node;
@@ -2275,6 +2362,10 @@ struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
 
 	mmap_assert_locked(mm);
 	/* Check the cache first. */
+	/* 一个查找VMA的优化方法，在 task_struct 中，有一个存放最近访问过的
+	 * VMA数组 vmacache[VMACACHE_SIZE]，其中可以存放4个最近使用的VMA，
+	 * 这是利用了局部性原理，如果在数组中没有找到，那么采取遍历进程红黑树
+	 * */
 	vma = vmacache_find(mm, addr);
 	if (likely(vma))
 		return vma;
@@ -2305,6 +2396,7 @@ EXPORT_SYMBOL(find_vma);
 /*
  * Same as find_vma, but also return a pointer to the previous VMA in *pprev.
  */
+/* 基于 find_vma ，返回VMA的前继成员，即返回第一个小于 addr 的VMA */
 struct vm_area_struct *
 find_vma_prev(struct mm_struct *mm, unsigned long addr,
 			struct vm_area_struct **pprev)
@@ -3034,6 +3126,27 @@ out:
  *  anonymous maps.  eventually we may be able to do some
  *  brk-specific accounting here.
  */
+/* addr: 旧的边界地址，一般页面对齐了
+ * len: 要申请内存的大小，指的一般是虚拟地址空间
+ * flags: 分配时传递的标志位
+ * uf: 内部临时用的链表
+ * 基本上执行的是分配VMA的操作
+ *
+ * VM_DATA_DEFAULT_FLAGS --> protection_map --> 对应的PTE属性为 PAGE_READONLY，
+ * 所以PTE属性为: zzy
+ * PTE_TYPE_PAGE: 这是一个基于页面的页表项，也就是设置页表项的Bit[1:0]
+ * PTE_AF: 设置访问位
+ * PTE_SHARED: 设置内存共享属性
+ * MT_NORMAL: 设置内存属性为 normal
+ * PTE_USER: 设置AP访问位，允许以用户权限来访问该内存
+ * PTE_RDONLY: 设置该内存为只读
+ * PTE_NG: 设置该内存对应的TLB只属于该进程
+ * PTE_PXN: 表示该内存中的代码不能在特权模式下运行
+ * PTE_UXN: 表示该内存中的代码不能在用户模式下运行
+ * 上述的PTE属性最终需要设置到页表项中，当然现在还不会设置进去，通常情况下是发生缺页异常之后
+ * 分配物理内存，然后设置PTE属性。或者用户调用 mlock 系列系统调用，那么brk系统调用会立马为用
+ * 户程序分配物理页
+ * */
 static int do_brk_flags(unsigned long addr, unsigned long len, unsigned long flags, struct list_head *uf)
 {
 	struct mm_struct *mm = current->mm;
@@ -3046,8 +3159,12 @@ static int do_brk_flags(unsigned long addr, unsigned long len, unsigned long fla
 	/* Until we need other flags, refuse anything except VM_EXEC. */
 	if ((flags & (~VM_EXEC)) != 0)
 		return -EINVAL;
+	/* brk系统调用下来的，基本上认为是 VM_READ & VM_WRITE */
 	flags |= VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
 
+	/* 在进程地址空间中寻找一个可以使用的线性地址区间，它返回一段没有映射过的空间的起始地址
+	 * 这里的的flag是 MAP_FIXED，就是表示使用指定的虚拟地址对应的空间，即brk传下来的地址。
+	 * */
 	mapped_addr = get_unmapped_area(NULL, addr, len, 0, MAP_FIXED);
 	if (IS_ERR_VALUE(mapped_addr))
 		return mapped_addr;
@@ -3057,6 +3174,7 @@ static int do_brk_flags(unsigned long addr, unsigned long len, unsigned long fla
 		return error;
 
 	/* Clear old maps, set up prev, rb_link, rb_parent, and uf */
+	/* 挺奇怪的，上一层看到重叠的不管了，这一层看到重叠的，直接释放 zzy */
 	if (munmap_vma_range(mm, addr, len, &prev, &rb_link, &rb_parent, uf))
 		return -ENOMEM;
 
@@ -3071,6 +3189,8 @@ static int do_brk_flags(unsigned long addr, unsigned long len, unsigned long fla
 		return -ENOMEM;
 
 	/* Can we just expand an old private anonymous mapping? */
+	/* 检查有没有办法合并addr附近的VMA，如果没办法合并，那么只能新创建一个
+	 * VMA，VMA的地址空间是 [addr, addr + len] */
 	vma = vma_merge(mm, prev, addr, addr + len, flags,
 			NULL, NULL, pgoff, NULL, NULL_VM_UFFD_CTX);
 	if (vma)
@@ -3091,6 +3211,7 @@ static int do_brk_flags(unsigned long addr, unsigned long len, unsigned long fla
 	vma->vm_pgoff = pgoff;
 	vma->vm_flags = flags;
 	vma->vm_page_prot = vm_get_page_prot(flags);
+	/* 新创建的VMA需要添加到 mm->mmap 链表和红黑树中 */
 	vma_link(mm, vma, prev, rb_link, rb_parent);
 out:
 	perf_event_mmap(vma);
@@ -3228,11 +3349,13 @@ int insert_vm_struct(struct mm_struct *mm, struct vm_area_struct *vma)
 	 * using the existing file pgoff checks and manipulations.
 	 * Similarly in do_mmap and in do_brk_flags.
 	 */
+	/* 判断是否为匿名映射的VMA，如果是设置 vm_pgoff 成员 */
 	if (vma_is_anonymous(vma)) {
 		BUG_ON(vma->anon_vma);
 		vma->vm_pgoff = vma->vm_start >> PAGE_SHIFT;
 	}
 
+	/* 将VMA插入链表和红黑树中 */
 	vma_link(mm, vma, prev, rb_link, rb_parent);
 	return 0;
 }

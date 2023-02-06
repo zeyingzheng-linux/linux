@@ -72,8 +72,10 @@ struct device_node {
 
 #define MAX_PHANDLE_ARGS 16
 struct of_phandle_args {
+	/* 父节点 */
 	struct device_node *np;
 	int args_count;
+	/* 存interrputs，例如：<0x00 0x01 0x04>，<类型 序号 触发> */
 	uint32_t args[MAX_PHANDLE_ARGS];
 };
 

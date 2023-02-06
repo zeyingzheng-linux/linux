@@ -323,13 +323,16 @@ struct vm_userfaultfd_ctx {};
 struct vm_area_struct {
 	/* The first cache line has the info for VMA tree walking. */
 
+	/* 在进程地址空间的起始地址和结束地址 */
 	unsigned long vm_start;		/* Our start address within vm_mm. */
 	unsigned long vm_end;		/* The first byte after our end address
 					   within vm_mm. */
 
 	/* linked list of VM areas per task, sorted by address */
+	/* 进程的VMA都连接成一个链表 */
 	struct vm_area_struct *vm_next, *vm_prev;
 
+	/* VMA作为一个节点加入红黑树，每个进程的 mm_struct 都有一根红黑树 mm->mm_rb */
 	struct rb_node vm_rb;
 
 	/*
@@ -342,13 +345,17 @@ struct vm_area_struct {
 
 	/* Second cache line starts here. */
 
+	/* 指向 VMA 所属进程的 mm_struct */
 	struct mm_struct *vm_mm;	/* The address space we belong to. */
 
 	/*
 	 * Access permissions of this VMA.
 	 * See vmf_insert_mixed_prot() for discussion.
 	 */
+	/* VMA的访问权限，用于将VMA属性标志位转换成处理相关的页表项的属性
+	 * vm_get_page_prot*/
 	pgprot_t vm_page_prot;
+	/* 描述该VMA的一组标志位，VMA属性标志位 */
 	unsigned long vm_flags;		/* Flags, see mm.h. */
 
 	/*
@@ -366,16 +373,21 @@ struct vm_area_struct {
 	 * can only be in the i_mmap tree.  An anonymous MAP_PRIVATE, stack
 	 * or brk vma (with NULL file) can only be in an anon_vma list.
 	 */
+	/* 以下两个用于管理反向映射，RMAP */
 	struct list_head anon_vma_chain; /* Serialized by mmap_lock &
 					  * page_table_lock */
 	struct anon_vma *anon_vma;	/* Serialized by page_table_lock */
 
 	/* Function pointers to deal with this struct. */
+	/* 方法集合，通常用于文件映射 */
 	const struct vm_operations_struct *vm_ops;
 
 	/* Information about our backing store: */
+	/* 指向文件映射的偏移量，这个变量的单位不是字节，而是页面的大小(page size)
+	 * 对于匿名页面来说，它的值可以是0或者 vm_addr / PAGE_SIZE */
 	unsigned long vm_pgoff;		/* Offset (within vm_file) in PAGE_SIZE
 					   units */
+	/* 指向file的实例，描述一个被映射的文件 */
 	struct file * vm_file;		/* File we map to (can be NULL). */
 	void * vm_private_data;		/* was vm_pte (shared mem) */
 
@@ -405,14 +417,20 @@ struct core_state {
 struct kioctx_table;
 struct mm_struct {
 	struct {
+		/* 进程的所有VMA形成一个单链表，这是该链表的头，VMA按照起始地址递增的
+		 * 方式插入 mmap中，zzy 从 __vma_link_list 看不出是按照地址递增插入的 */
 		struct vm_area_struct *mmap;		/* list of VMAs */
+		/* VMA红黑树的根节点 */
 		struct rb_root mm_rb;
 		u64 vmacache_seqnum;                   /* per-thread vmacache */
 #ifdef CONFIG_MMU
+		/* 用于判断虚拟内存是否由足够的空间，返回一段没有映射过的空间的起始地址
+		 * 这个函数会使用具体的处理器架构的实现 */
 		unsigned long (*get_unmapped_area) (struct file *filp,
 				unsigned long addr, unsigned long len,
 				unsigned long pgoff, unsigned long flags);
 #endif
+		/* 指向mmap空间的起始地址，在32bit处理器中，mmap的起始地址是 0x4000 0000 */
 		unsigned long mmap_base;	/* base of mmap area */
 		unsigned long mmap_legacy_base;	/* base of mmap area in bottom-up allocations */
 #ifdef CONFIG_HAVE_ARCH_COMPAT_MMAP_BASES
@@ -422,6 +440,7 @@ struct mm_struct {
 #endif
 		unsigned long task_size;	/* size of task vm space */
 		unsigned long highest_vm_end;	/* highest vma end address */
+		/* 指向进程的PGD */
 		pgd_t * pgd;
 
 #ifdef CONFIG_MEMBARRIER
@@ -443,6 +462,8 @@ struct mm_struct {
 		 * @mm_count (which may then free the &struct mm_struct if
 		 * @mm_count also drops to 0).
 		 */
+		/* 记录正在使用该进程地址空间的进程数目，如果两个线程共享该地址空间
+		 * 那么 mm_users 等于2 */
 		atomic_t mm_users;
 
 		/**
@@ -452,6 +473,7 @@ struct mm_struct {
 		 * Use mmgrab()/mmdrop() to modify. When this drops to 0, the
 		 * &struct mm_struct is freed.
 		 */
+		/* mm_struct 结构体的主体引用计数 */
 		atomic_t mm_count;
 
 #ifdef CONFIG_MMU
@@ -476,6 +498,8 @@ struct mm_struct {
 		 */
 		struct rw_semaphore mmap_lock;
 
+		/* 所有的 mm_struct 数据结构都连接到一个双向链表中，该链表的头是
+		 * init_mm 内存描述符，它是 init进程的地址空间 */
 		struct list_head mmlist; /* List of maybe swapped mm's.	These
 					  * are globally strung together off
 					  * init_mm.mmlist, and are protected
@@ -486,6 +510,7 @@ struct mm_struct {
 		unsigned long hiwater_rss; /* High-watermark of RSS usage */
 		unsigned long hiwater_vm;  /* High-water virtual memory usage */
 
+		/* 已经使用的进程地址空间总和 */
 		unsigned long total_vm;	   /* Total pages mapped */
 		unsigned long locked_vm;   /* Pages that have PG_mlocked set */
 		atomic64_t    pinned_vm;   /* Refcount permanently increased */
@@ -503,7 +528,9 @@ struct mm_struct {
 
 		spinlock_t arg_lock; /* protect the below fields */
 
+		/* 代码段，数据段的 起始地址和结束地址 */
 		unsigned long start_code, end_code, start_data, end_data;
+		/* 堆空间的起始地址(start_brk)和当前底部(brk)  */
 		unsigned long start_brk, brk, start_stack;
 		unsigned long arg_start, arg_end, env_start, env_end;
 
@@ -734,18 +761,32 @@ typedef __bitwise unsigned int vm_fault_t;
  *
  */
 enum vm_fault_reason {
+	/* 在缺页异常处理过程中无法分配内存 */
 	VM_FAULT_OOM            = (__force vm_fault_t)0x000001,
+	/* 系统中有内存但是遇到了无法处理的错误，只能发送信号给内核来终止发生异常的进程 */
 	VM_FAULT_SIGBUS         = (__force vm_fault_t)0x000002,
+	/* 主缺页: 是由交换机制引入的，对于交换的页面，地址映射建立好之后，还需要从交换分区
+	 * 中读取数据，这个过程涉及IO操作，耗时比较久，因此当前进程会被阻塞很长时间
+	 *
+	 * 次缺页: 从内存中直接分配了页面的情况，不需要冲交换分区中读数据 */
 	VM_FAULT_MAJOR          = (__force vm_fault_t)0x000004,
+	/* 写错误导致的缺页 */
 	VM_FAULT_WRITE          = (__force vm_fault_t)0x000008,
 	VM_FAULT_HWPOISON       = (__force vm_fault_t)0x000010,
 	VM_FAULT_HWPOISON_LARGE = (__force vm_fault_t)0x000020,
+	/* 对于无法处理的错误，内核发送SIGSEGV信号来终止进程 */
 	VM_FAULT_SIGSEGV        = (__force vm_fault_t)0x000040,
+	/* 表示缺页异常处理函数安装了新的PTE，这次缺页异常不需要返回一个新的页面 */
 	VM_FAULT_NOPAGE         = (__force vm_fault_t)0x000100,
+	/* 缺页异常处理函数持有了页锁 */
 	VM_FAULT_LOCKED         = (__force vm_fault_t)0x000200,
+	/* 缺页异常处理函数被阻塞了，需要重试 */
 	VM_FAULT_RETRY          = (__force vm_fault_t)0x000400,
+	/* 巨页的缺页异常处理失败，切换到小页 */
 	VM_FAULT_FALLBACK       = (__force vm_fault_t)0x000800,
+	/* 处理完成写时复制的情况 */
 	VM_FAULT_DONE_COW       = (__force vm_fault_t)0x001000,
+	/* 表示缺页异常处理函数没有修改页表，但是需要fsync来同步 */
 	VM_FAULT_NEEDDSYNC      = (__force vm_fault_t)0x002000,
 	VM_FAULT_HINDEX_MASK    = (__force vm_fault_t)0x0f0000,
 };

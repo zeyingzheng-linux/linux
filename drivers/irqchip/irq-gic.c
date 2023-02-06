@@ -1063,6 +1063,10 @@ static int gic_irq_domain_translate(struct irq_domain *d,
 		if (fwspec->param_count < 3)
 			return -EINVAL;
 
+		/* gic-v2来说，0-15是给SGI，16-31是给PPI的。
+		 * 所以SPI需要+32，dts给进来的是主板上的中断序号，我们转换成
+		 * GIC硬件中断号
+		 * */
 		switch (fwspec->param[0]) {
 		case 0:			/* SPI */
 			*hwirq = fwspec->param[1] + 32;
@@ -1081,6 +1085,7 @@ static int gic_irq_domain_translate(struct irq_domain *d,
 		return 0;
 	}
 
+	/* zzy:什么鬼东西 */
 	if (is_fwnode_irqchip(fwspec->fwnode)) {
 		if(fwspec->param_count != 2)
 			return -EINVAL;

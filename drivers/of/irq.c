@@ -51,6 +51,7 @@ EXPORT_SYMBOL_GPL(irq_of_parse_and_map);
  * Return: A pointer to the interrupt parent node, or NULL if the interrupt
  * parent could not be determined.
  */
+/* zzy */
 struct device_node *of_irq_find_parent(struct device_node *child)
 {
 	struct device_node *p;
@@ -300,6 +301,7 @@ int of_irq_parse_one(struct device_node *device, int index, struct of_phandle_ar
 	addr = of_get_property(device, "reg", NULL);
 
 	/* Try the new-style interrupts-extended first */
+	/* zzy : interrupts-extended */
 	res = of_parse_phandle_with_args(device, "interrupts-extended",
 					"#interrupt-cells", index, out_irq);
 	if (!res)

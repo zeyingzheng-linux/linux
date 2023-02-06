@@ -521,6 +521,7 @@ static void irq_domain_set_mapping(struct irq_domain *domain,
 		return;
 
 	mutex_lock(&domain->revmap_mutex);
+	/* irq_data 的插入方式 */
 	if (hwirq < domain->revmap_size)
 		rcu_assign_pointer(domain->revmap[hwirq], irq_data);
 	else

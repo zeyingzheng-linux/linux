@@ -267,49 +267,78 @@ extern unsigned int kobjsize(const void *objp);
  */
 #define VM_NONE		0x00000000
 
+/* 可读属性 */
 #define VM_READ		0x00000001	/* currently active flags */
+/* 可写属性 */
 #define VM_WRITE	0x00000002
+/* 可执行 */
 #define VM_EXEC		0x00000004
+/* 允许被多个进程共享 */
 #define VM_SHARED	0x00000008
 
 /* mprotect() hardcodes VM_MAYREAD >> 4 == VM_READ, and so for r/w/x bits. */
+/* 允许设置VM_READ属性 */
 #define VM_MAYREAD	0x00000010	/* limits for mprotect() etc */
+/* 允许设置VM_WRITE属性 */
 #define VM_MAYWRITE	0x00000020
+/* 允许设置VM_EXEC属性 */
 #define VM_MAYEXEC	0x00000040
+/* 允许设置VM_MAYSHARE属性 */
 #define VM_MAYSHARE	0x00000080
 
+/* 该VMA允许向低地址增长 */
 #define VM_GROWSDOWN	0x00000100	/* general info on the segment */
+/* 表示该VMA适用于用户态的缺页异常处理 */
 #define VM_UFFD_MISSING	0x00000200	/* missing pages tracking */
+/* 表示使用纯正的PFN，不需要使用内核的page数据结构来管理物理页面 */
 #define VM_PFNMAP	0x00000400	/* Page-ranges managed without "struct page", just pure PFN */
+/* 用于页面的写保护跟踪 */
 #define VM_UFFD_WP	0x00001000	/* wrprotect pages tracking */
 
+/* 表示该VMA的内存会立刻分配物理内存，并且页面被锁定，不会被交换到交换分区 */
 #define VM_LOCKED	0x00002000
+/* 表示IO内存映射 */
 #define VM_IO           0x00004000	/* Memory mapped I/O or similar */
 
 					/* Used by sys_madvise() */
+/* 表示应用程序会顺序读该VMA的内容 */
 #define VM_SEQ_READ	0x00008000	/* App will access data sequentially */
+/* 表示应用程序会随机读该VMA的内容 */
 #define VM_RAND_READ	0x00010000	/* App will not benefit from clustered reads */
 
+/* 表示创建分支时不要复制该VMA */
 #define VM_DONTCOPY	0x00020000      /* Do not copy this vma on fork */
+/* 表示mremap()系统调用禁止VMA扩展 */
 #define VM_DONTEXPAND	0x00040000	/* Cannot expand with mremap() */
 #define VM_LOCKONFAULT	0x00080000	/* Lock the pages covered when they are faulted in */
+/* 在创建IPC以共享VMA时，检测是否有足够的空闲内存用于映射 */
 #define VM_ACCOUNT	0x00100000	/* Is a VM accounted object */
 #define VM_NORESERVE	0x00200000	/* should the VM suppress accounting */
+/* 用于巨页的映射 */
 #define VM_HUGETLB	0x00400000	/* Huge TLB Page VM */
+/* 表示同步的缺页异常 */
 #define VM_SYNC		0x00800000	/* Synchronous page faults */
+/* 与架构相关的标志位 */
 #define VM_ARCH_1	0x01000000	/* Architecture-specific flag */
+/* 表示不会从父进程相应的VMA中复制页表到子进程的VMA中 */
 #define VM_WIPEONFORK	0x02000000	/* Wipe VMA contents in child. */
+/* 表示该VMA不包含到核心转储文件中 */
 #define VM_DONTDUMP	0x04000000	/* Do not include in the core dump */
 
+/* 软件模拟实现的脏位。用于一些特殊的架构，需要打开以下宏 */
 #ifdef CONFIG_MEM_SOFT_DIRTY
 # define VM_SOFTDIRTY	0x08000000	/* Not soft dirty clean area */
 #else
 # define VM_SOFTDIRTY	0
 #endif
 
+/* 表示混合使用了纯PFN以及page数据结构的页面，如使用vm_insert_page函数插入VMA */
 #define VM_MIXEDMAP	0x10000000	/* Can contain "struct page" and pure PFN pages */
+/* 表示在madvise系统调用中使用MADV_HUGEPAGE标志位来标记VMA */
 #define VM_HUGEPAGE	0x20000000	/* MADV_HUGEPAGE marked this vma */
+/* 表示在madvise系统调用中使用VM_NOHUGEPAGE标志位来标记VMA */
 #define VM_NOHUGEPAGE	0x40000000	/* MADV_NOHUGEPAGE marked this vma */
+/* 表示该VMA是可以合并的，用于KSM机制 */
 #define VM_MERGEABLE	0x80000000	/* KSM may merge identical pages */
 
 #ifdef CONFIG_ARCH_USES_HIGH_VMA_FLAGS
@@ -411,6 +440,7 @@ extern unsigned int kobjsize(const void *objp);
 /*
  * Special vmas that are non-mergable, non-mlock()able.
  */
+/* 表示该VMA不能合并，也不能锁定 */
 #define VM_SPECIAL (VM_IO | VM_DONTEXPAND | VM_PFNMAP | VM_MIXEDMAP)
 
 /* This mask prevents VMA from being scanned with khugepaged */
@@ -2698,6 +2728,8 @@ extern struct vm_area_struct * find_vma_prev(struct mm_struct * mm, unsigned lon
  * Returns: The first VMA within the provided range, %NULL otherwise.  Assumes
  * start_addr < end_addr.
  */
+/* 只要保证 end_addr > vma->vm_start 那么就可以保证两个vma是相互交叉的
+ * 由 find_vma 的实现就可以知道有这样的结论 */
 static inline
 struct vm_area_struct *find_vma_intersection(struct mm_struct *mm,
 					     unsigned long start_addr,
@@ -2852,19 +2884,28 @@ static inline vm_fault_t vmf_error(int err)
 struct page *follow_page(struct vm_area_struct *vma, unsigned long address,
 			 unsigned int foll_flags);
 
+/* 判断PTE是否具有可写属性 */
 #define FOLL_WRITE	0x01	/* check pte is writable */
+/* 标记页面可访问 */
 #define FOLL_TOUCH	0x02	/* mark page accessed */
+/* 在这个页面执行 get_page() 操作，增加 _refcount */
 #define FOLL_GET	0x04	/* do get_page on page */
 #define FOLL_DUMP	0x08	/* give error on hole if it would be zero */
+/* get_user_pages() 函数具有读写权限 */
 #define FOLL_FORCE	0x10	/* get_user_pages read/write w/o permission */
+/* 如果需要一个磁盘传输，那么开始一个I/O传输不需要为其等待 */
 #define FOLL_NOWAIT	0x20	/* if a disk transfer is needed, start the IO
 				 * and return without waiting upon it */
 #define FOLL_POPULATE	0x40	/* fault in pages (with FOLL_MLOCK) */
 #define FOLL_NOFAULT	0x80	/* do not fault in pages */
+/* 检查这个页面是否硬件污染的页面 */
 #define FOLL_HWPOISON	0x100	/* check page is hwpoisoned */
+/* 强制NUMA触发一个缺页中断 */
 #define FOLL_NUMA	0x200	/* force NUMA hinting page fault */
+/* 等待页面合并 */
 #define FOLL_MIGRATION	0x400	/* wait for page to replace migration entry */
 #define FOLL_TRIED	0x800	/* a retry, previous pass started an IO */
+/* 标记这个页面是锁定的 */
 #define FOLL_MLOCK	0x1000	/* lock present pages */
 #define FOLL_REMOTE	0x2000	/* we are working on non-current tsk/mm */
 #define FOLL_COW	0x4000	/* internal GUP flag */

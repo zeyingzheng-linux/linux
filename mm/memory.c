@@ -602,14 +602,34 @@ static void print_bad_pte(struct vm_area_struct *vma, unsigned long addr,
  * PFNMAP mappings in order to support COWable mappings.
  *
  */
+/* vm_normal_page 函数返回普通映射页面的page数据结构，一些特殊映射的页面是不会返回
+ * page数据结构的，这些页面不希望参与内存管理的一些活动，例如页面回收，页面迁移，
+ * KSM等。HAS_PTE_SPECIAL宏利用PTE的空闲位来做一些有意思的事情，ARM32的两级页表
+ * 没有实现这个特性，在ARM64中，定义了PTE_SPECIAL位，这是利用硬件上空闲的位来定义的
+ *
+ * 内核通常使用pte_mkspecial宏来设置软件定义个PTE_SPECIAL位，主要有以下用途：
+ * 1. 用作内核的零页
+ * 2. 大量的驱动程序使用 remap_pfn_range 函数来映射内核页面到用户空间。这些用户程序
+ *    使用的VMA通常设置了(VM_IO | VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP) 属性
+ * 3. vm_insert_page()/vmf_insert_pfn() 映射内核页面到用户空间
+ *
+ * vm_normal_page 把页面分成两类：
+ * 普通页面：普通映射的页面，例如匿名页面、页面高速缓存、共享内存页面
+ * 特殊页面：特殊映射的页面，这些页面不希望参与内存管理的回收或者合并，有以下几种
+ *           VM_IO: 为IO设备映射内存
+ *           VM_PFN__MAP: 纯PFN映射
+ *           VM_MIXEDMAP: 固定映射
+ * */
 struct page *vm_normal_page(struct vm_area_struct *vma, unsigned long addr,
 			    pte_t pte)
 {
 	unsigned long pfn = pte_pfn(pte);
 
 	if (IS_ENABLED(CONFIG_ARCH_HAS_PTE_SPECIAL)) {
+		/* 没有设置 PTE_SPECIAL 位 */
 		if (likely(!pte_special(pte)))
 			goto check_pfn;
+		/* 设置了 PTE_SPECIAL 位，具体看上面的注释 */
 		if (vma->vm_ops && vma->vm_ops->find_special_page)
 			return vma->vm_ops->find_special_page(vma, addr);
 		if (vma->vm_flags & (VM_PFNMAP | VM_MIXEDMAP))
@@ -625,6 +645,13 @@ struct page *vm_normal_page(struct vm_area_struct *vma, unsigned long addr,
 
 	/* !CONFIG_ARCH_HAS_PTE_SPECIAL case follows: */
 
+	/* 首先检查(VM_PFNMAP|VM_MIXEDMAP)的情况，remap_pfn_range 函数通常使用
+	 * VM_PFNMAP位且指向第一个PFN映射，所以可以使用如下公式来判断这种情况
+	 * 下的特殊映射页面:
+	 * pfn_of_page == vma->vm_pgoff + ((addr - vma->vm_start) >> PAGE_SHIFT)
+	 * 另一种情况是虚拟地址线性映射到PFN，如果映射是写时复制映射，那么页面
+	 * 也是普通映射的页面
+	 * */
 	if (unlikely(vma->vm_flags & (VM_PFNMAP|VM_MIXEDMAP))) {
 		if (vma->vm_flags & VM_MIXEDMAP) {
 			if (!pfn_valid(pfn))
@@ -640,10 +667,12 @@ struct page *vm_normal_page(struct vm_area_struct *vma, unsigned long addr,
 		}
 	}
 
+	/* 如果是系统零页(zero page) */
 	if (is_zero_pfn(pfn))
 		return NULL;
 
 check_pfn:
+	/* 如果PFN大于高端内存的地址范围 */
 	if (unlikely(pfn > highest_memmap_pfn)) {
 		print_bad_pte(vma, addr, pte, NULL);
 		return NULL;
