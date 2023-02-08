@@ -482,7 +482,9 @@ static vm_fault_t __do_page_fault(struct mm_struct *mm, unsigned long addr,
 {
 	struct vm_area_struct *vma = find_vma(mm, addr);
 
-	/* 找不到vma，说明addr没有在进程地址空间。例如内核访问空指针之列的吧 */
+	/* 找不到vma，说明addr没有在进程地址空间。
+	 * 1. 例如内核访问空指针之列，则发生OOPS
+	 * 2. 用户操作不当地址，给进程发送SIGSEGV或者SIGBUS */
 	if (unlikely(!vma))
 		return VM_FAULT_BADMAP;
 

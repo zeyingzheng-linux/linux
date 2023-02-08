@@ -561,8 +561,11 @@ static inline bool fault_flag_allow_retry_first(enum fault_flag flags)
 struct vm_fault {
 	const struct {
 		struct vm_area_struct *vma;	/* Target VMA */
+		/* 用于页面分配器分配页面时请求集合，如分配优先级、分配行为等 */
 		gfp_t gfp_mask;			/* gfp mask to be used for allocations */
+		/* 在VMA中的偏移量 */
 		pgoff_t pgoff;			/* Logical page offset based on vma */
+		/* 发生缺页异常时的虚拟地址，页面对齐了 */
 		unsigned long address;		/* Faulting virtual address */
 	};
 	enum fault_flag flags;		/* FAULT_FLAG_xxx flags
@@ -579,7 +582,9 @@ struct vm_fault {
 					 */
 	};
 
+	/* 处理写时复制时用的页面 */
 	struct page *cow_page;		/* Page handler may use for COW fault */
+	/* 缺页异常处理程序最后会返回一个物理页面的page实例，设置了 VM_FAULT_NOPAGE除外 */
 	struct page *page;		/* ->fault handlers should return a
 					 * page here, unless VM_FAULT_NOPAGE
 					 * is set (which is also implied by

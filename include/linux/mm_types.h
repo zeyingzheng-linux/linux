@@ -353,7 +353,7 @@ struct vm_area_struct {
 	 * See vmf_insert_mixed_prot() for discussion.
 	 */
 	/* VMA的访问权限，用于将VMA属性标志位转换成处理相关的页表项的属性
-	 * vm_get_page_prot*/
+	 * vm_get_page_prot ，例如 PAGE_READONLY*/
 	pgprot_t vm_page_prot;
 	/* 描述该VMA的一组标志位，VMA属性标志位 */
 	unsigned long vm_flags;		/* Flags, see mm.h. */

@@ -1954,6 +1954,10 @@ out:
 	 */
 	vma->vm_flags |= VM_SOFTDIRTY;
 
+	/* 由一个让属性降级的功能，也就是我们需要把一些可写并且共享映射的页面在初始化时
+	 * 设置为只读的，这样可以跟踪写操作的时间， vma_wants_writenotify 做这个操作，
+	 * 在这个场景下，由于文件系统通常会设置 vm_ops->page_mkwrite 回调，因此返回true
+	 * 故而 vma_set_page_prot 会清除VM_SHARED标志位，然后重新冲 protecttion_map取PTE属性*/
 	vma_set_page_prot(vma);
 
 	return addr;

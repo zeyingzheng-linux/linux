@@ -188,8 +188,10 @@
 #define PTE_GP			(_AT(pteval_t, 1) << 50)	/* BTI guarded */
 /*
  * P2621: Hardware management of dirty state
- * HD=1,AP[2]=1,DBM=1: 被当成是可写的。因为这时如果写发生，硬件会把AP[2]设置为0，且不会产生异常
  * HD=0,AP[2]=1,DBM=x: 因为硬件开关关闭，所以此时写发生，将会产生一个Permission fault
+ * HD=1,AP[2]=1,DBM=1: 当成是可写的。因为这时如果写发生，硬件会把AP[2]设置为0(即清除PTE_RDONLY)
+ *                     且不会产生异常。在没有硬件支持之前，通过产生一个访问权限的缺页异常
+ *                     来进行软件模拟和清除这个只读标志位
  * HD=1,AP[2]=0,DBM=0: 写进来，理论上应该就是更新DBM=1了
  * COW（copy on write）应该是HD=1,AP[2]=1,DBM=0的case，要产生异常才对
  */

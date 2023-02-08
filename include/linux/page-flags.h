@@ -498,6 +498,7 @@ static __always_inline int PageMappingFlags(struct page *page)
 	return ((unsigned long)page->mapping & PAGE_MAPPING_FLAGS) != 0;
 }
 
+/* 判断匿名页面 */
 static __always_inline int PageAnon(struct page *page)
 {
 	page = compound_head(page);
