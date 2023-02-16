@@ -193,6 +193,9 @@ int __anon_vma_prepare(struct vm_area_struct *vma)
 	if (!avc)
 		goto out_enomem;
 
+	/* 检查是否可以复用当前VMA的near_vma和prev_vma的anon_vma。能复用的判断条件比较苛刻，
+	 * 例如两个VMA必须相邻，VMA的内存的policy相同，由相同的file等。
+	 * */
 	anon_vma = find_mergeable_anon_vma(vma);
 	allocated = NULL;
 	if (!anon_vma) {
@@ -278,6 +281,10 @@ int anon_vma_clone(struct vm_area_struct *dst, struct vm_area_struct *src)
 	struct anon_vma_chain *avc, *pavc;
 	struct anon_vma *root = NULL;
 
+	/* 遍历父进程VMA中的 anon_vma_chain链表寻找 anon_vma_chain实例。父进程在为VMA分配匿名
+	 * 页面时， do_anonymous_page -> anon_vma_prepare 函数会分配一个实例并挂入该进程VMA的
+	 * anon_vma_chain链表中，因此可以很容易的通过链表找到 anon_vma_chain实例，此处称 pavc
+	 * */
 	list_for_each_entry_reverse(pavc, &src->anon_vma_chain, same_vma) {
 		struct anon_vma *anon_vma;
 
@@ -291,6 +298,10 @@ int anon_vma_clone(struct vm_area_struct *dst, struct vm_area_struct *src)
 		}
 		anon_vma = pavc->anon_vma;
 		root = lock_anon_vma_root(root, anon_vma);
+		/* 把新分配的 anon_vma_chain 枢纽挂入子进程的 VMA的 anon_vma_chain 链表中
+		 * 把新分配的 anon_vma_chain 枢纽挂入父进程的 anon_vma->rb_root的红黑树中
+		 * 使得子进程和父进程的 VMA之间由一个联系的纽带
+		 * */
 		anon_vma_chain_link(dst, avc, anon_vma);
 
 		/*
@@ -349,10 +360,12 @@ int anon_vma_fork(struct vm_area_struct *vma, struct vm_area_struct *pvma)
 		return error;
 
 	/* An existing anon_vma has been reused, all done then. */
+	/* 如果子进程的VMA已经创建了 anon_vma 数据结构，说明绑定已经完成了 */
 	if (vma->anon_vma)
 		return 0;
 
 	/* Then add our own anon_vma. */
+	/* 分配属于子进程的 anon_vma 和 anon_vma_chain */
 	anon_vma = anon_vma_alloc();
 	if (!anon_vma)
 		goto out_error;
@@ -372,10 +385,15 @@ int anon_vma_fork(struct vm_area_struct *vma, struct vm_area_struct *pvma)
 	 * process it belongs to. The root anon_vma needs to be pinned until
 	 * this anon_vma is freed, because the lock lives in the root.
 	 */
+	/* 增加的是父进程的 anon_vma中的引用计数 */
 	get_anon_vma(anon_vma->root);
 	/* Mark this anon_vma as the one where our new (COWed) pages go. */
 	vma->anon_vma = anon_vma;
 	anon_vma_lock_write(anon_vma);
+	/* 把 anon_vma_chain 挂入子进程的 vma->anon_vma_chain 链表中
+	 * 把 anon_vma_chain 加入子进程的 anon_vma->rb_root 红黑树中
+	 * 至此，子进程的VMA和父进程之间的纽带建立完成
+	 * */
 	anon_vma_chain_link(vma, avc, anon_vma);
 	anon_vma->parent->num_children++;
 	anon_vma_unlock_write(anon_vma);
@@ -1068,8 +1086,10 @@ static void __page_set_anon_rmap(struct page *page,
 	 * the PAGE_MAPPING_ANON type identifier, otherwise the rmap code
 	 * could mistake the mapping for a struct address_space and crash.
 	 */
+	/* mapping得指向匿名，所以 + PAGE_MAPPING_ANON */
 	anon_vma = (void *) anon_vma + PAGE_MAPPING_ANON;
 	WRITE_ONCE(page->mapping, (struct address_space *) anon_vma);
+	/* 计算当前地址address在VMA中的第几个页面，然后把offset设置到page->index中 */
 	page->index = linear_page_index(vma, address);
 }
 
@@ -1185,6 +1205,7 @@ void page_add_new_anon_rmap(struct page *page,
 	int nr = compound ? thp_nr_pages(page) : 1;
 
 	VM_BUG_ON_VMA(address < vma->vm_start || address >= vma->vm_end, vma);
+	/* 表示这个页面可以交换到磁盘 */
 	__SetPageSwapBacked(page);
 	if (compound) {
 		VM_BUG_ON_PAGE(!PageTransHuge(page), page);
@@ -1200,7 +1221,9 @@ void page_add_new_anon_rmap(struct page *page,
 		/* increment count (starts at -1) */
 		atomic_set(&page->_mapcount, 0);
 	}
+	/* 增加页面所在的zone的匿名页面的计数，匿名页面计数类型为 NR_ANON_MAPPED */
 	__mod_lruvec_page_state(page, NR_ANON_MAPPED, nr);
+	/* 设置页面为匿名映射页面，即mapping成员 */
 	__page_set_anon_rmap(page, vma, address, 1);
 }
 
@@ -2309,6 +2332,8 @@ static void rmap_walk_anon(struct page *page, struct rmap_walk_control *rwc,
 
 	pgoff_start = page_to_pgoff(page);
 	pgoff_end = pgoff_start + thp_nr_pages(page) - 1;
+	/* 基本上就是遍历父进程的红黑树即可，因为AVC枢纽在父进程的红黑树中，而它的VMA
+	 * 指向了子进程，它的anon_vma指向了父进程的 */
 	anon_vma_interval_tree_foreach(avc, &anon_vma->rb_root,
 			pgoff_start, pgoff_end) {
 		struct vm_area_struct *vma = avc->vma;

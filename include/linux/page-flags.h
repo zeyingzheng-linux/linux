@@ -101,28 +101,50 @@
  * SPARSEMEM_EXTREME with !SPARSEMEM_VMEMMAP).
  */
 enum pageflags {
+	/* 如果该位置位，说明页面已经上锁，其他模块不能访问这个页面，以防止竞争
+	 * see lock_page */
 	PG_locked,		/* Page is locked. Don't touch. */
+	/* PG_referenced和 PG_active用于控制页面的活跃程度，在kswapd页面回收中使用 */
 	PG_referenced,
+	/* 表示页面的数据已经从块设备成功读取 */
 	PG_uptodate,
+	/* 表示这个页面内容发生改变，这个页面为脏页，即页面的内容被改写后还没有和外部存储器进
+	 * 行过同步操作 */
 	PG_dirty,
+	/* 表示页面在LRU链表中，内核使用LRU链表来管理活跃和不活跃页面 */
 	PG_lru,
+	/* PG_referenced和 PG_active用于控制页面的活跃程度，在kswapd页面回收中使用 */
 	PG_active,
 	PG_workingset,
+	/* 表示有进程在等待这个页面 */
 	PG_waiters,		/* Page has waiters, check its waitqueue. Must be bit #7 and in the same byte as "PG_locked" */
+	/* 表示页面操作过程中发生IO错误时会设置该位 */
 	PG_error,
+	/* 表示页面用于slab分配器 */
 	PG_slab,
+	/* 页面的所有者使用，如果是高速缓存页面，文件系统可以使用它 */
 	PG_owner_priv_1,	/* Owner use. If pagecache, fs may use*/
+	/* 与架构相关的页面状态位 */
 	PG_arch_1,
+	/* 表示该页面不可被换出 */
 	PG_reserved,
+	/* 表示该页面是有效的，当 page->private包含有效值时会设置该位。如果页面是高速缓存页面，
+	 * 那么包含一些文件系统相关的数据信息 */
 	PG_private,		/* If pagecache, has fs-private data */
+	/* 如果是高速缓存页面，可能包含于文件系统相关的私有数据 */
 	PG_private_2,		/* If pagecache, has fs aux data */
+	/* 表示页面的内容正在向块设备回写 */
 	PG_writeback,		/* Page is under writeback */
 	PG_head,		/* A head page */
 	PG_mappedtodisk,	/* Has blocks allocated on-disk */
+	/* 表示这个页面马上要被回收 */
 	PG_reclaim,		/* To be reclaimed asap */
+	/* 表示页面具有swap缓存功能，通常匿名页面才可以写回交换分区 */
 	PG_swapbacked,		/* Page is backed by RAM/swap */
+	/* 表示页面不可被回收 */
 	PG_unevictable,		/* Page is "unevictable"  */
 #ifdef CONFIG_MMU
+	/* 表示页面对应的VMA处于mlocked状态 */
 	PG_mlocked,		/* Page is vma mlocked */
 #endif
 #ifdef CONFIG_ARCH_USES_PG_UNCACHED
@@ -147,6 +169,7 @@ enum pageflags {
 	PG_checked = PG_owner_priv_1,
 
 	/* SwapBacked */
+	/* 表示页面处于交换缓存中 */
 	PG_swapcache = PG_owner_priv_1,	/* Swap page: swp_entry_t in private */
 
 	/* Two page bits are conscripted by FS-Cache to maintain local caching
@@ -498,13 +521,14 @@ static __always_inline int PageMappingFlags(struct page *page)
 	return ((unsigned long)page->mapping & PAGE_MAPPING_FLAGS) != 0;
 }
 
-/* 判断匿名页面 */
+/* 判断是否为匿名页面 */
 static __always_inline int PageAnon(struct page *page)
 {
 	page = compound_head(page);
 	return ((unsigned long)page->mapping & PAGE_MAPPING_ANON) != 0;
 }
 
+/* 判断是否为非LRU页面 */
 static __always_inline int __PageMovable(struct page *page)
 {
 	return ((unsigned long)page->mapping & PAGE_MAPPING_FLAGS) ==
@@ -518,6 +542,7 @@ static __always_inline int __PageMovable(struct page *page)
  * is found in VM_MERGEABLE vmas.  It's a PageAnon page, pointing not to any
  * anon_vma, but to that page's node of the stable tree.
  */
+/* 判断是否为KSM页面 */
 static __always_inline int PageKsm(struct page *page)
 {
 	page = compound_head(page);

@@ -68,6 +68,7 @@ struct mem_cgroup;
 #endif
 
 struct page {
+	/* 页面标志位集合 */
 	unsigned long flags;		/* Atomic flags, some possibly
 					 * updated asynchronously */
 	/*
@@ -83,10 +84,28 @@ struct page {
 			 * lruvec->lru_lock.  Sometimes used as a generic list
 			 * by the page owner.
 			 */
+			/* 匿名页面或者文件映射页面会通过该成员添加到LRU链表中 */
 			struct list_head lru;
 			/* See page-flags.h for PAGE_MAPPING_FLAGS */
+			/* mapping 成员表示页面锁指向的地址空间。内核中的地址空间通常有两个:
+			 * 一个用于文件映射页面，如读取文件，地址空间将文件内容与存储介质做关联
+			 * 一个用于匿名映射页面。
+			 * 主要分成三种情况：
+			 * 1. 对于匿名页面，mapping指向VMA的 anon_vma数据结构
+			 * 2. 对于交换高速缓存页面，指向交换分区的 swapper_spaces
+			 * 3. 对于文件映射页面，指向该文件所属的 address_space，它包含文件所属
+			 * 的存储介质的相关信息，例如 inode。
+			 * 内核将 mapping 的最低两位拿出来做判断:
+			 * Bit[0]: 用于判断页面是否是匿名页面	PageAnon
+			 * Bit[1]: 用于判断页面是否为非LRU页面 	__PageMovable
+			 * Bit[1:0]: 都为1，则表示这是一个 KSM页面 PageKsm
+			 * page_rmapping 用于返回 mapping 成员，但会清除最低2位
+			 * page_mapping 用于返回page数据结构中 mapping 成员指向的地址空间
+			 * page_mapped 用于判断该页面是否映射到用户PTE，利用 _mapcount成员
+			 * */
 			struct address_space *mapping;
 			/* 放MIGRATE类型 */
+			/* 表示这个页面在一个vma映射中的序号或偏移量 */
 			pgoff_t index;		/* Our offset within mapping. */
 			/**
 			 * @private: Mapping-private opaque data.
@@ -95,6 +114,7 @@ struct page {
 			 * Indicates order in the buddy system if PageBuddy.
 			 */
 			/* 第一个页描述符会放order */
+			/* 指向私有数据的指针 */
 			unsigned long private;
 		};
 		struct {	/* page_pool used by netstack */
@@ -133,10 +153,16 @@ struct page {
 #endif
 				};
 			};
+			/* slab缓存描述符，slab分配器中的第一个物理页面的page数据结构中的
+			 * slab_cache指向slab缓存描述符
+			 * */
 			struct kmem_cache *slab_cache; /* not slob */
 			/* Double-word boundary */
+			/* 管理区，可以看做一个数组，数组的每个成员占用1字节，每个成员代表
+			 * 一个slab对象 */
 			void *freelist;		/* first free object */
 			union {
+				/* 在slab分配器中用来指向第一个slab对象的起始地址 */
 				void *s_mem;	/* slab: first object */
 				unsigned long counters;		/* SLUB */
 				struct {			/* SLUB */
@@ -169,6 +195,7 @@ struct page {
 				struct mm_struct *pt_mm; /* x86 pgds only */
 				atomic_t pt_frag_refcount; /* powerpc */
 			};
+			/* 用于保护操作的自旋锁，通常在更新页表时候需要这个锁以进行保护 */
 #if ALLOC_SPLIT_PTLOCKS
 			spinlock_t *ptl;
 #else
@@ -192,6 +219,7 @@ struct page {
 		};
 
 		/** @rcu_head: You can use this to free a page by RCU. */
+		/* RCU锁，在slab分配器中释放slab的物理页面 */
 		struct rcu_head rcu_head;
 	};
 
@@ -200,7 +228,22 @@ struct page {
 		 * If the page can be mapped to userspace, encodes the number
 		 * of times this page is referenced by a page table.
 		 */
-		/* 用于标记page是否在buddy中，设置成-1或者PAGE_BUDDY_MAPCOUNT_VALUE(-128)，在buddy */
+		/* 用于标记page是否在buddy中，设置成-1或者PAGE_BUDDY_MAPCOUNT_VALUE(-128)
+		 * 在buddy??? */
+
+		/* 表示这个页面被进程映射的个数，即已经映射了多少个用户PTE。每个用户进程都拥有
+		 * 各自独立的虚拟地址空间和一份独立的页表，所以会出现多个用户进程空间同时映射到
+		 * 同一个物理页面的情况，RMAP系统就是利用这个特性来实现的，该成员主要用于RMAP中
+		 * (记住，不包括内核地址空间映射物理页面时产生的PTE)
+		 * -1 : 表示没有PTE映射到页面
+		 *
+		 *  0 : 表示只有父进程映射到页面。匿名页面刚分配时，初始化为0。do_anonymous_page
+		 *  产生的匿名页面通过 page_add_new_anon_rmap添加到RAMP系统中，会设置成员为 0。
+		 *
+		 * >0 : 表示除了父进程还有其他进程映射到这个页面。例如父进程创建子进程为例子，
+		 * 设置父进程的PTE内容到子进程中并增加页面的 _mapcount。copy_mm -> dup_mmap
+		 * -> copy_pte_range -> copy_present_pte
+		 * */
 		atomic_t _mapcount;
 
 		/*
@@ -211,12 +254,38 @@ struct page {
 		 */
 		unsigned int page_type;
 
+		/* 表示slab分配器中活跃对象的数量，当为0时，表示这个slab分配器中没有活跃对象
+		 * 可以销毁这个slab分配器。活跃对象就是已经被迁移到对象缓冲池中的对象 */
 		unsigned int active;		/* SLAB */
 		int units;			/* SLOB */
 	};
 
 	/* Usage count. *DO NOT USE DIRECTLY*. See page_ref.h */
-	/* 没有用户使用时为0，有使用的话就增加 */
+	/* 内核中引用该页面的次数: =0: 表示该页面为空闲页面或即将要被释放的页面
+	 *
+	 * >0: 表示该页面一斤干杯分配且内核正在使用，暂时不会被释放。
+	 * get_page : +1
+	 * put_page : -1，若-1后等于0，那么会释放该页面
+	 *
+	 * 应用场景:
+	 * 1. 初始状态下，空闲页面为0
+	 * 2. 分配页面时，变成1. alloc_pages -> ... -> set_page_refcounted
+	 * 3. 加入LRU链表，页面会被kswapd内核线程使用，因此+1。以 malloc分配内存为例子，发生缺页
+	 *    中断后， do_anonymous_page 成功分配一个页面，在设置硬件PTE之前，调用 lru_cache_add
+	 *    把这个匿名页面添加到LRU链表中，在这个过程中使用 get_page +1，当页面已经添加到LRU链
+	 *    表调用__pagevec_lru_add 会 -1，这样做的目的是防止页面在添加到LRU链表过程中被释放。
+	 * 4. 被映射到其他用户进程的PTE时，也会 +1.如父进程创建子进程共享地址空间时。copy_mm ->
+	 *    dup_mmap -> copy_pte_range -> copy_present_pte -> get_page
+	 * 5. 页面的private成员指向私有数据
+	 *    1). 对于PG_swapable的页面， add_to_swap_cache 函数会增加 _refcount
+	 *    2). 对于PG_private的页面，主要在块设备的 buffer_head中使用，如 buffer_migrate_page
+	 *        函数中会增加 _refcount
+	 * 6. 内核对页面进行操作的关键路径上也会使 _refcount +1，如内核的 follow_page 函数和
+	 *    get_user_pages。以 follow_page 为例，调用者通常需要设置 FOLL_GET 标志位来使其增加
+	 *    _refcount。如KSM 中获取可合并的页面函数 get_mergeable_page->follow_page。另一个例
+	 *    子是 DIRECT_IO，见 write_protect_page -> follow_page. 
+	 *    5.15 get_user_pages -> follow_page_mask
+	 * */
 	atomic_t _refcount;
 
 #ifdef CONFIG_MEMCG
@@ -373,7 +442,11 @@ struct vm_area_struct {
 	 * can only be in the i_mmap tree.  An anonymous MAP_PRIVATE, stack
 	 * or brk vma (with NULL file) can only be in an anon_vma list.
 	 */
-	/* 以下两个用于管理反向映射，RMAP */
+	/* 以下两个用于管理反向映射，RMAP 典型应用场景如下:
+	 * 1. kswapd内核线程为了回收页面，需要断开素有映射到该匿名页面的用户PTE
+	 * 2. 页面迁移时，需要断开多有映射到匿名页面的用户PTE
+	 * RMAP的核心函数是 try_to_unmap，它会断开一个页面的所有映射
+	 * */
 	struct list_head anon_vma_chain; /* Serialized by mmap_lock &
 					  * page_table_lock */
 	struct anon_vma *anon_vma;	/* Serialized by page_table_lock */
@@ -384,7 +457,9 @@ struct vm_area_struct {
 
 	/* Information about our backing store: */
 	/* 指向文件映射的偏移量，这个变量的单位不是字节，而是页面的大小(page size)
-	 * 对于匿名页面来说，它的值可以是0或者 vm_addr / PAGE_SIZE */
+	 * 对于匿名页面来说，它的值可以是0或者 vm_addr / PAGE_SIZE，例如mmap中采用 MAP_SHARED
+	 * 映射时为0，采用 MAP_PRIVATE 映射时为 vm_addr / PAGE_SIZE。vm_pgoff值在匿名页面的
+	 * 生命周期中只有RMAP才用到*/
 	unsigned long vm_pgoff;		/* Offset (within vm_file) in PAGE_SIZE
 					   units */
 	/* 指向file的实例，描述一个被映射的文件 */

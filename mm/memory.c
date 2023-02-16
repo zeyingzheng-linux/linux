@@ -989,7 +989,9 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 		if (retval <= 0)
 			return retval;
 
+		/* _refcount +1 */
 		get_page(page);
+		//
 		page_dup_rmap(page, false);
 		rss[mm_counter(page)]++;
 	}

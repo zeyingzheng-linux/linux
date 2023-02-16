@@ -27,7 +27,9 @@
  * pointing to this anon_vma once its vma list is empty.
  */
 struct anon_vma {
+	/* 指向 anon_vma数据结构中的根节点 */
 	struct anon_vma *root;		/* Root of this anon_vma tree */
+	/* 保护 anon_vma数据结构中链表的读写信号量 */
 	struct rw_semaphore rwsem;	/* W: modification, R: walking the list */
 	/*
 	 * The refcount is taken on an anon_vma when there is no
@@ -61,6 +63,7 @@ struct anon_vma {
 	 */
 
 	/* Interval tree of private "related" vmas */
+	/* 红黑树根节点， anon_vma 内部有一颗红黑树 */
 	struct rb_root_cached rb_root;
 };
 
@@ -78,9 +81,15 @@ struct anon_vma {
  * which link all the VMAs associated with this anon_vma.
  */
 struct anon_vma_chain {
+	/* 可以指向父进程或者子进程的vma，具体情况需要具体分析，作为枢纽的时候是特殊情况
+	 * 指向了子进程的VMA */
 	struct vm_area_struct *vma;
+	/* 可以指向父进程或者子进程的anon_vma，具体情况需要具体分析，作为枢纽的时候是特殊情况
+	 * 指向了父进程的 anon_vma */
 	struct anon_vma *anon_vma;
+	/* 链表节点，通常把anon_vma_chain添加到 vma->anon_vma_chain */
 	struct list_head same_vma;   /* locked by mmap_lock & page_table_lock */
+	/* 红黑树节点，通常把 anon_vma_chain 添加到 anon_vma->rb_root */
 	struct rb_node rb;			/* locked by anon_vma->rwsem */
 	unsigned long rb_subtree_last;
 #ifdef CONFIG_DEBUG_VM_RB

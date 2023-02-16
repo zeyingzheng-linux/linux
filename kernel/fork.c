@@ -553,6 +553,7 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 				goto fail_nomem;
 			charge = len;
 		}
+		/* 新建一个临时用的VMA数据结构tmp，复制父进程VMA数据结构的内容到tmp */
 		tmp = vm_area_dup(mpnt);
 		if (!tmp)
 			goto fail_nomem;
@@ -570,6 +571,7 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 			 * copy page for current vma.
 			 */
 			tmp->anon_vma = NULL;
+			/* 为子进程创建相应的 anon_vma数据结构 */
 		} else if (anon_vma_fork(tmp, mpnt))
 			goto fail_nomem_anon_vma_fork;
 		tmp->vm_flags &= ~(VM_LOCKED | VM_LOCKONFAULT);

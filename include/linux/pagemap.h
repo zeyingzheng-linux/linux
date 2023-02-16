@@ -622,6 +622,7 @@ static inline void lock_page(struct page *page)
 {
 	might_sleep();
 	if (!trylock_page(page))
+		/* 进入不可中断的睡眠状态，发送信号 SIGKILL不能让它们终止 */
 		__lock_page(page);
 }
 
