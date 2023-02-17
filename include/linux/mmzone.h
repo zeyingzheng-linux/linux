@@ -681,10 +681,12 @@ struct zone {
 } ____cacheline_internodealigned_in_smp;
 
 enum pgdat_flags {
+	/* PGDAT_DIRTY: 发现有大量的脏文件页面 */
 	PGDAT_DIRTY,			/* reclaim scanning has recently found
 					 * many dirty file pages at the tail
 					 * of the LRU.
 					 */
+	/* PGDAT_WRITEBACK: 发现由大量页面正在等待回写到磁盘 */
 	PGDAT_WRITEBACK,		/* reclaim scanning has recently found
 					 * many pages under writeback
 					 */

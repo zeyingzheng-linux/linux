@@ -801,9 +801,13 @@ static bool page_referenced_one(struct page *page, struct vm_area_struct *vma,
 	};
 	int referenced = 0;
 
+	/* 记住 page_referenced_one 是被遍历调用的，即每个进程的vma都过一遍，
+	 * page_vma_mapped_walk从虚拟地址 pvmw->address开始遍历页表，找出对
+	 * 应的PTE，最终结果就是把该page对应的每个进程的PTE都找到了 */
 	while (page_vma_mapped_walk(&pvmw)) {
 		address = pvmw.address;
 
+		/* 表示内存是锁定的，直接返回false */
 		if (vma->vm_flags & VM_LOCKED) {
 			page_vma_mapped_walk_done(&pvmw);
 			pra->vm_flags |= VM_LOCKED;
@@ -811,6 +815,10 @@ static bool page_referenced_one(struct page *page, struct vm_area_struct *vma,
 		}
 
 		if (pvmw.pte) {
+			/* 判断PTE最近是否被访问过，如果访问过，PTE_AF就会被置位，
+			 * 那么我们清除PTE_AF，然后调用 flush_tlb_page_nosync来
+			 * 刷新这个页面对应的TLB，为什么？
+			 * */
 			if (ptep_clear_flush_young_notify(vma, address,
 						pvmw.pte)) {
 				/*
@@ -821,6 +829,10 @@ static bool page_referenced_one(struct page *page, struct vm_area_struct *vma,
 				 * already gone, the unmap path will have set
 				 * PG_referenced or activated the page.
 				 */
+				/* 排除顺序读的情况，因为顺序读的页面高速缓存是被回收
+				 * 的最佳候选者，所以对这些页面高速缓存做了弱访问引用
+				 * 处理，而其余的情况都会被当做PTE引用，referenced++
+				 * */
 				if (likely(!(vma->vm_flags & VM_SEQ_READ)))
 					referenced++;
 			}
@@ -873,6 +885,13 @@ static bool invalid_page_referenced_vma(struct vm_area_struct *vma, void *arg)
  * Quick test_and_clear_referenced for all mappings to a page,
  * returns the number of ptes which referenced the page.
  */
+/* 用于判断页面是否被访问过，并返回引用的PTE的个数，即访问引用这个页面的用户进程
+ * 虚拟页面的个数。核心思想是利用RMAP系统来统计访问、引用PTE的用户个数。
+ * 1. 利用RMAP系统遍历所有映射该页面的PTE
+ * 2. 对于每个PTE，如果PTE_AF置位了，那么说明之前被访问过，计一个引用，然后清除AF
+ * 3. 返回引用计数，表示该页面访问、引用了多少个PTE
+ * 扫描活跃LRU会调用
+ * */
 int page_referenced(struct page *page,
 		    int is_locked,
 		    struct mem_cgroup *memcg,
@@ -890,9 +909,11 @@ int page_referenced(struct page *page,
 	};
 
 	*vm_flags = 0;
+	/* page->_mapcount */
 	if (!pra.mapcount)
 		return 0;
 
+	/* 判断是否由地址空间映射 */
 	if (!page_rmapping(page))
 		return 0;
 
@@ -911,12 +932,14 @@ int page_referenced(struct page *page,
 		rwc.invalid_vma = invalid_page_referenced_vma;
 	}
 
+	/* 遍历素有映射该页面的PTE */
 	rmap_walk(page, &rwc);
 	*vm_flags = pra.vm_flags;
 
 	if (we_locked)
 		unlock_page(page);
 
+	/* 返回引用页面的PTE的个数 */
 	return pra.referenced;
 }
 

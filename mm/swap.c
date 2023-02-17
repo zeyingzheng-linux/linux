@@ -404,6 +404,7 @@ void mark_page_accessed(struct page *page)
 	page = compound_head(page);
 
 	if (!PageReferenced(page)) {
+		/* 设置PG_referenced */
 		SetPageReferenced(page);
 	} else if (PageUnevictable(page)) {
 		/*
@@ -418,10 +419,15 @@ void mark_page_accessed(struct page *page)
 		 * pagevec, mark it active and it'll be moved to the active
 		 * LRU on the next drain.
 		 */
+		/* 设置PG_active，如果原本在某链表上的，那么移到活跃LRU，如果之前
+		 * 不在链表的，那么下一回drain的时候，也会到活跃LRU上，简而言之，
+		 * 这里就是把页面添加到活跃LRU上面
+		 * */
 		if (PageLRU(page))
 			activate_page(page);
 		else
 			__lru_cache_activate_page(page);
+		/* 清除PG_referenced */
 		ClearPageReferenced(page);
 		workingset_activation(page);
 	}

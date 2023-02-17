@@ -2197,6 +2197,8 @@ static enum compact_result __compaction_suitable(struct zone *zone, int order,
  *   COMPACT_SUCCESS  - If the allocation would succeed without compaction
  *   COMPACT_CONTINUE - If compaction should run now
  */
+/* 用来判断每个zone是否适合做内存规整。当有zone适合做内存规整时，不必再继续
+ * 扫描页面和回收内存，也许稍后的内存规整机制有助于释放大块内存 */
 enum compact_result compaction_suitable(struct zone *zone, int order,
 					unsigned int alloc_flags,
 					int highest_zoneidx)

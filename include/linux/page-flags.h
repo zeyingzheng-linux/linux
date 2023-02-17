@@ -139,7 +139,7 @@ enum pageflags {
 	PG_mappedtodisk,	/* Has blocks allocated on-disk */
 	/* 表示这个页面马上要被回收 */
 	PG_reclaim,		/* To be reclaimed asap */
-	/* 表示页面具有swap缓存功能，通常匿名页面才可以写回交换分区 */
+	/* 表示页面具有swap缓存功能，可以说就是匿名页面 */
 	PG_swapbacked,		/* Page is backed by RAM/swap */
 	/* 表示页面不可被回收 */
 	PG_unevictable,		/* Page is "unevictable"  */
@@ -169,7 +169,7 @@ enum pageflags {
 	PG_checked = PG_owner_priv_1,
 
 	/* SwapBacked */
-	/* 表示页面处于交换缓存中 */
+	/* 表示页面是否分配了swap交换空间 */
 	PG_swapcache = PG_owner_priv_1,	/* Swap page: swp_entry_t in private */
 
 	/* Two page bits are conscripted by FS-Cache to maintain local caching
