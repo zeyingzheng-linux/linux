@@ -91,8 +91,8 @@ struct page {
 			 * 一个用于文件映射页面，如读取文件，地址空间将文件内容与存储介质做关联
 			 * 一个用于匿名映射页面。
 			 * 主要分成三种情况：
-			 * 1. 对于匿名页面，mapping指向VMA的 anon_vma数据结构
-			 * 2. 对于交换高速缓存页面，指向交换分区的 swapper_spaces
+			 * 1. 对于匿名页面，mapping指向VMA的 anon_vma数据结构，也可能为NULL
+			 * 2. 对于交换缓存页面，指向交换分区的 swapper_spaces
 			 * 3. 对于文件映射页面，指向该文件所属的 address_space，它包含文件所属
 			 * 的存储介质的相关信息，例如 inode。
 			 * 内核将 mapping 的最低两位拿出来做判断:

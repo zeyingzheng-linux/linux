@@ -405,9 +405,26 @@ struct address_space_operations {
 	 * migrate the contents of a page to the specified target. If
 	 * migrate_mode is MIGRATE_ASYNC, it must not block.
 	 */
+	/* migratepage 方法会迁移旧页面的内容到新页面，并且设置page对应的
+	 * 成员和属性。驱动实现的 migratepage方法在完成页面迁移之后需要
+	 * 显式地调用 __ClearPageMovable函数清除 PAGE_MAPPING_MOVABLE标志
+	 * 位。如果迁移页面不成功，返回 -EAGAIN，那么根据页面迁移机制会重
+	 * 试一次。若返回其他错误值，那么根据迁移机制就会放弃这个页面
+	 * */
 	int (*migratepage) (struct address_space *,
 			struct page *, struct page *, enum migrate_mode);
+	/* 页面迁移机制中的 isolate_movable_page 函数会调用这个方法来分离
+	 * 页面。当分离成功之后，这些页面会被标记为 PG_isolated，这样其他
+	 * CPU在分离页面的时候就会忽略这个页面。一个页面被成功分离之后，
+	 * 页面迁移机制就可以使用page数据结构的lru成员，如把页面添加到待
+	 * 迁移的链表中，而驱动程序发现一个页面设置了 PG_isolated，说明根
+	 * 据内存模块的页面迁移机制已经分离了这个页面，因此驱动程序不能使
+	 * 用这个页面的page中的lru成员
+	 * */
 	bool (*isolate_page)(struct page *, isolate_mode_t);
+	/* 当页面迁移失败时，这个方法把页面迁移回原来的地方
+	 * 见: zsmalloc_aops
+	 * */
 	void (*putback_page)(struct page *);
 	int (*launder_page) (struct page *);
 	int (*is_partially_uptodate) (struct page *, unsigned long,

@@ -4459,6 +4459,23 @@ out:
 
 #ifdef CONFIG_COMPACTION
 /* Try memory compaction for high-order allocations before reclaim */
+/* Linux内核中触发内存规整有3个途径：
+ * 1. 手动触发。通过写任意数值到 /proc/sys/vm/compact_memory 节点，会手动触发内存
+ *    规整。它会扫描系统中的所有内存节点上的zone，对每个zone都会做一次内存规整。现
+ *    有内存做页面回收是以内存节点为单位，但是内存规整是以zone为单位的。
+ * 2. kcompactd内核线程。和页面回收kswapd内核线程一样，每个内存节点会创建一个内核
+ *    线程，名称为"kcompactd0","kcompactd1"
+ * 3. 直接内存规整。和页面回收一样，当页面分配器发现在低水位情况下无法满足页面分配
+ *    时，会进入慢速路径。在慢速路径里，除了唤醒kswapd内核线程外，还会调用函数
+ *    __alloc_pages_direct_compact，尝试整合出一大块空闲内存。
+ * */
+/* gfp_mask: 传递给页面分配器的分配掩码
+ * order: 请求分配页面的大小，其大小为2的order次幂个连续的物理页面
+ * alloc_flags: 页面分配器内部使用的分配标志位
+ * ac: 页面分配器内部使用的分配上下文描述符
+ * prio: 内存规整优先级
+ * compact_result: 内存规整后返回的结果
+ * */
 static struct page *
 __alloc_pages_direct_compact(gfp_t gfp_mask, unsigned int order,
 		unsigned int alloc_flags, const struct alloc_context *ac,

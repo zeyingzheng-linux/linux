@@ -25,33 +25,42 @@ enum compact_result {
 	 * compaction didn't start as it was not possible or direct reclaim
 	 * was more suitable
 	 */
+	/* 内存规整不满足条件，因此退出 */
 	COMPACT_SKIPPED,
 	/* compaction didn't start as it was deferred due to past failures */
+	/* 因为过去的一些错误导致内存规整退出 */
 	COMPACT_DEFERRED,
 
 	/* For more detailed tracepoint output - internal to compaction */
 	COMPACT_NO_SUITABLE_PAGE,
 	/* compaction should continue to another pageblock */
+	/* 表示可以在下一个页块中进行内存规整 */
 	COMPACT_CONTINUE,
 
 	/*
 	 * The full zone was compacted scanned but wasn't successful to compact
 	 * suitable pages.
 	 */
+	/* 表示已经完成一轮的页面扫描，但是没能满足页面分配请求的需求 */
 	COMPACT_COMPLETE,
 	/*
 	 * direct compaction has scanned part of the zone but wasn't successful
 	 * to compact suitable pages.
 	 */
+	/* 表示根据直接页面回收机制已经扫描了zone中部分的页面，
+	 * 但是没有找到可以进行内存规整的页面
+	 * */
 	COMPACT_PARTIAL_SKIPPED,
 
 	/* compaction terminated prematurely due to lock contentions */
+	/* 出于某些锁竞争的原因退出内存规整 */
 	COMPACT_CONTENDED,
 
 	/*
 	 * direct compaction terminated after concluding that the allocation
 	 * should now succeed
 	 */
+	/* 表示已经满足页面分配的需求，从而退出这次直接内存规整 */
 	COMPACT_SUCCESS,
 };
 
