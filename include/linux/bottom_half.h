@@ -9,6 +9,8 @@ extern void __local_bh_disable_ip(unsigned long ip, unsigned int cnt);
 #else
 static __always_inline void __local_bh_disable_ip(unsigned long ip, unsigned int cnt)
 {
+	/* 说加 barrier防止编译器做优化， thread_info->preempt_count
+	 * 相当于per-cpu变量，所以不需要使用内存屏障指令 */
 	preempt_count_add(cnt);
 	barrier();
 }

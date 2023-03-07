@@ -304,7 +304,8 @@ static inline void invoke_softirq(void)
 void __local_bh_disable_ip(unsigned long ip, unsigned int cnt)
 {
 	unsigned long flags;
-
+         /* 如果现在已经在硬件中断上下文了，没有必要有bh相关的锁机制，
+	  * 因为关中断已经是一个更强的锁机制了 */
 	WARN_ON_ONCE(in_irq());
 
 	raw_local_irq_save(flags);
@@ -359,6 +360,8 @@ EXPORT_SYMBOL(_local_bh_enable);
 
 void __local_bh_enable_ip(unsigned long ip, unsigned int cnt)
 {
+         /* 如果现在已经在硬件中断上下文了，没有必要有bh相关的锁机制，
+	  * 因为关中断已经是一个更强的锁机制了 */
 	WARN_ON_ONCE(in_irq());
 	lockdep_assert_irqs_enabled();
 #ifdef CONFIG_TRACE_IRQFLAGS
@@ -373,6 +376,13 @@ void __local_bh_enable_ip(unsigned long ip, unsigned int cnt)
 	 * Keep preemption disabled until we are done with
 	 * softirq processing:
 	 */
+	/* 保留1是为了关闭本地cpu的抢占，因为接下来调用 do_softirq 时不希望其他
+	 * 高优先级的任务抢占CPU或者当前任务被迁移到其他CPU上。假如当前进程P执行
+	 * 在CPU0上，在下面发生了中断，中断返回前CPU被高优先任务抢占 ，那么进程P
+	 * 再被调度时可能会选择在CPU1上唤醒(select_task_rq_fair), __softirq_pending
+	 * 是per-cpu变量，进程P在CPU1上重新执行此处会发现__softirq_pending并没有
+	 * 触发软中断，因此之前的软中断会延迟执行
+	 * */
 	__preempt_count_sub(cnt - 1);
 
 	if (unlikely(!in_interrupt() && local_softirq_pending())) {
@@ -380,13 +390,16 @@ void __local_bh_enable_ip(unsigned long ip, unsigned int cnt)
 		 * Run softirq if any pending. And do it in its own stack
 		 * as we may be calling this deep in a task call stack already.
 		 */
+		/* 非中断上下文，执行软中断处理 */
 		do_softirq();
 	}
 
+	/* 这时候才打开抢占 */
 	preempt_count_dec();
 #ifdef CONFIG_TRACE_IRQFLAGS
 	local_irq_enable();
 #endif
+	/* 检查是否有高优先级任务的抢占需求 */
 	preempt_check_resched();
 }
 EXPORT_SYMBOL(__local_bh_enable_ip);
@@ -404,6 +417,7 @@ static inline void softirq_handle_end(void)
 
 static inline void ksoftirqd_run_begin(void)
 {
+	/* zzy: 线程化了还关中断，这样不是很离谱吗 */
 	local_irq_disable();
 }
 
@@ -419,6 +433,7 @@ static inline bool should_wake_ksoftirqd(void)
 
 static inline void invoke_softirq(void)
 {
+	/* 已经唤醒了线程处理软中断了，那么就不再主动处理了(在中断返回后处理) */
 	if (ksoftirqd_running(local_softirq_pending()))
 		return;
 
@@ -527,6 +542,12 @@ asmlinkage __visible void __softirq_entry __do_softirq(void)
 	 * softirq. A softirq handled, such as network RX, might set PF_MEMALLOC
 	 * again if the socket is related to swapping.
 	 */
+	/* PF_MEMALLOC 目前主要用在两个地方：
+	 * 1. 直接内存压缩(derect compaction)的内核路径
+	 * 2. 网络子系统在分配skbuff失败时会设置 PF_MEMALLOC 标志，这是Linux3.6
+	 *    内核中社区专家 Mel Gorman为了解决网络磁盘设备(Nework Block Device)
+	 *    NBD，使用交换分区时出现死锁的问题而引入的，暂不讨论
+	 * */
 	current->flags &= ~PF_MEMALLOC;
 
 	pending = local_softirq_pending();
@@ -539,10 +560,13 @@ restart:
 	/* Reset the pending bitmask before enabling irqs */
 	set_softirq_pending(0);
 
+	/* 开中断 */
 	local_irq_enable();
 
 	h = softirq_vec;
 
+	/* ffs会找到pending中第一个置位的位，这个bit就代表了软中断的优先级
+	 * 现在有这么几种优先级，例如  TASKLET_SOFTIRQ */
 	while ((softirq_bit = ffs(pending))) {
 		unsigned int vec_nr;
 		int prev_count;
@@ -571,8 +595,16 @@ restart:
 	    __this_cpu_read(ksoftirqd) == current)
 		rcu_softirq_qs();
 
+	/* 关中断 */
 	local_irq_disable();
 
+	/* 软中断执行过程中是开中断的，可能在这个过程中又发生了中断而触发了软中断
+	 * 即其他内核代码路径调用了 raise_softirq 函数。那么三个条件
+	 * 1. 软中断处理时间没有超过2ms
+	 * 2. 当前进程没有进程要求调度，即 !need_resched 表示没有调度请求
+	 * 3. 这种循环小于10次
+	 * 都满足，则继续处理软中断
+	 * */
 	pending = local_softirq_pending();
 	if (pending) {
 		if (time_before(jiffies, end) && !need_resched() &&
@@ -632,6 +664,11 @@ static inline void __irq_exit_rcu(void)
 #endif
 	account_hardirq_exit(current);
 	preempt_count_sub(HARDIRQ_OFFSET);
+	/* 如果是在软中断上下文被中断进去，然后中断返回到软中断上下文，那么我们就
+	 * 不要再次调度软中断了，这样的判断保证了，软中断在一个CPU上总是串行执行的
+	 *
+	 * 还有那种local_bh_disable也是同样的道理，不调度了
+	 * */
 	if (!in_interrupt() && local_softirq_pending())
 		invoke_softirq();
 
@@ -724,6 +761,7 @@ static void __tasklet_schedule_common(struct tasklet_struct *t,
 
 	local_irq_save(flags);
 	head = this_cpu_ptr(headp);
+	/* 将新的t挂入链表尾部 */
 	t->next = NULL;
 	*head->tail = t;
 	head->tail = &(t->next);
@@ -771,13 +809,19 @@ static void tasklet_action_common(struct softirq_action *a,
 	tl_head->tail = &tl_head->head;
 	local_irq_enable();
 
+	/* 遍历list取出所有的tasklet一一执行  */
 	while (list) {
 		struct tasklet_struct *t = list;
 
 		list = list->next;
 
+		/* 尝试原子设置 TASKLET_STATE_RUN，达到上锁目的 */
 		if (tasklet_trylock(t)) {
+			/* 看是否tasklet被禁止了， tasklet_disable */
 			if (!atomic_read(&t->count)) {
+				/* 清除TASKLET_STATE_SCHED，返回老值
+				 * 先清除然后调用的原因是，清除完之后可以再次被
+				 * 调度，这样不容易丢tasklet*/
 				if (tasklet_clear_sched(t)) {
 					if (t->use_callback)
 						t->callback(t);
@@ -790,12 +834,22 @@ static void tasklet_action_common(struct softirq_action *a,
 			tasklet_unlock(t);
 		}
 
+		/* 处理该tasklet已经在其他cpu的情况，即 tasklet_trylock失败了。
+		 * 这种情况我们会把当前CPU的tasklet重新挂入，然后触发等待下一
+		 * 次的执行
+		 * */
 		local_irq_disable();
 		t->next = NULL;
 		*tl_head->tail = t;
 		tl_head->tail = &t->next;
 		__raise_softirq_irqoff(softirq_nr);
 		local_irq_enable();
+		/* 考虑这么一种case: 设备A中断发生，进入A的tasklet，此时在CPU0上，
+		 * set run, clear sched, 执行回调时，设备B中断发生，去处理。此时
+		 * 设备A又发生中断，调度给cpu1执行，很快执行完毕，执行软中断，进入
+		 * 则发现 tasklet_trylock失败了，跳过该tasklet，重新加入尾部，重新
+		 * schedule
+		 * */
 	}
 }
 
@@ -911,6 +965,8 @@ static int ksoftirqd_should_run(unsigned int cpu)
 
 static void run_ksoftirqd(unsigned int cpu)
 {
+	/* 这里关中断没关系，_do_softirq里面会打开中断的
+	 * 这里是进程上下文 */
 	ksoftirqd_run_begin();
 	if (local_softirq_pending()) {
 		/*

@@ -1509,6 +1509,8 @@ static int i2c_register_adapter(struct i2c_adapter *adap)
 
 	/* Notify drivers */
 	mutex_lock(&core_lock);
+	/* 主要用在不知道设备到底挂在哪个adap上的情况
+	 * see: i2c_register_driver */
 	bus_for_each_drv(&i2c_bus_type, NULL, adap, __process_new_adapter);
 	mutex_unlock(&core_lock);
 
@@ -1868,6 +1870,8 @@ int i2c_register_driver(struct module *owner, struct i2c_driver *driver)
 	pr_debug("driver [%s] registered\n", driver->driver.name);
 
 	/* Walk the adapters that are already present */
+	/* 主要用在不知道设备到底挂在哪个adap上的情况
+	 * see: i2c_register_adapter */
 	i2c_for_each_dev(driver, __process_new_driver);
 
 	return 0;

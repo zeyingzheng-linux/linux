@@ -118,7 +118,7 @@ SYM_CODE_END(primary_entry)
  */
 /*
  * 主要作用是将bootloade传出来的x0-x3这四个参数保存到boot_args数组中去，boot_args属于bss段，不是clean to poc的范围，即如果bootloader
- * 偷偷访问过boot_args，那么cache mem里面残留的就是随机值，如果属于data段的话，cache mem留下的应该是0，因为data段保证clean to poc了。
+ * 偷偷访问过boot_args，那么cache mem里面残留的就是随机值，如果属于data段的话，cache mem留下的应该是确定值，因为data段保证clean to poc了。
  * 仔细想一想，除了这种bootloader访问的情况，还有没有可能类似，在内核写之前已经被prefetch到cache mem了，因为data段的值是0，所以需要inval？
  *
  * boot_args 是对齐到__cacheline_aligned的。

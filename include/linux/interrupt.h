@@ -603,14 +603,20 @@ static inline struct task_struct *this_cpu_ksoftirqd(void)
 
 struct tasklet_struct
 {
+	/* 多个 tasklet串成一个链表 */
 	struct tasklet_struct *next;
+	/* TASKLET_STATE_SCHED 表示已经被调度，准备运行
+	 * TASKLET_STATE_RUN 表示tasklet正在运行 */
 	unsigned long state;
+	/* 0: 表示tasklet处于激活状态
+	 * !0: 表示tasklet被禁止，不允许执行 */
 	atomic_t count;
 	bool use_callback;
 	union {
 		void (*func)(unsigned long data);
 		void (*callback)(struct tasklet_struct *t);
 	};
+	/* 传递参数给tasklet处理函数 */
 	unsigned long data;
 };
 
