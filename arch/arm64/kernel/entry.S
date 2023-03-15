@@ -576,6 +576,7 @@ SYM_CODE_END(el\el\ht\()_\regsize\()_\label)
 	entry_handler	1, t, 64, fiq
 	entry_handler	1, t, 64, error
 
+	/* el1h_64_irq_handler */
 	entry_handler	1, h, 64, sync
 	entry_handler	1, h, 64, irq
 	entry_handler	1, h, 64, fiq
