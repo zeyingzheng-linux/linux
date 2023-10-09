@@ -8,3 +8,9 @@
 
 
 scp arch/arm64/boot/Image root@pi:/boot/kernel8.img
+
+
+sudo ifconfig eth0 192.168.0.233 up
+sudo service ssh restart
+echo "7 4 1 7" > /proc/sys/kernel/printk
+

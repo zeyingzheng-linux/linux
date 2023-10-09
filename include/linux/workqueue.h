@@ -30,6 +30,11 @@ void delayed_work_timer_fn(struct timer_list *t);
 enum {
 	WORK_STRUCT_PENDING_BIT	= 0,	/* work item is pending execution */
 	WORK_STRUCT_INACTIVE_BIT= 1,	/* work item is inactive */
+	/* 当data字段包含WORK_STRUCT_PWQ_BIT，表示其高位用于保存上一次
+	 * pool_workqueue数据结构的指针，低8位用于存放一些标志位。
+	 * 否则其高位保存上一次执行该work的worker_pool的ID，低5位用于
+	 * 存放一些标志位。
+	 * */
 	WORK_STRUCT_PWQ_BIT	= 2,	/* data points to pwq */
 	WORK_STRUCT_LINKED_BIT	= 3,	/* next work is linked to this one */
 #ifdef CONFIG_DEBUG_OBJECTS_WORK
@@ -94,6 +99,12 @@ enum {
 	WORKER_DESC_LEN		= 24,
 };
 
+/*
+ * data：包括两部分，低位部分是work的标志位，剩余的位通常用于存放上一次运行的
+ * work_pool的ID或pool_workqueue的指针，存放的内容由WORK_STRUCT_WQ标志位来决定。
+ * func：是work的处理函数。
+ * entry：用于把work挂到其他队列上。
+ * */
 struct work_struct {
 	atomic_long_t data;
 	struct list_head entry;
@@ -301,10 +312,32 @@ static inline unsigned int work_static(struct work_struct *work) { return 0; }
  * Documentation/core-api/workqueue.rst.
  */
 enum {
+	/* WQ_UNBOUND：work会加入UNBOUND工作队列中，UNBOUND工作队列的工作线程没有
+	 * 绑定到具体的CPU上。该类型的work不需要额外的同步管理，UNBOUND工作线程池
+	 * 会尝试尽快执行它的work，这类work会牺牲一部分性能（局部原理带来的性能）
+	 * 提升，但是比较适用于以下场景：
+	 * 1. 一些应用会在不同的CPU上跳跃，这样如果创建BOUND类型的工作队列，会创建
+	 * 很多没用的工作线程。
+	 * 2. 长时间运行的CPU消耗性的应用（标记WQ_CPU_INTENSIVE标记）通常会创建
+	 * UNBOUND类型的工作队列，进程调度器会管理这类工作线程在哪个CPU上运行。
+	 * */
 	WQ_UNBOUND		= 1 << 1, /* not bound to any cpu */
+	/* WQ_FREEZABLE：该标记的工作队列会参与到系统的suspend过程中，这会让工作线程
+	 * 处理完当前所有的work才完成进程冻结，并且这个过程中不会再新开始一个work的
+	 * 执行，直到进程被解冻。
+	 * */
 	WQ_FREEZABLE		= 1 << 2, /* freeze during suspend */
+	/* WQ_MEM_RECLAIM：当内存紧张时，创建新的工作线程可能会失败，系统还有一个
+	 * rescuer工作线程会接管这种情况。
+	 * */
 	WQ_MEM_RECLAIM		= 1 << 3, /* may be used for memory reclaim */
+	/* WQ_HIGHPRI：属于高优先级的工作线程池，即比较低的nice值
+	 * */
 	WQ_HIGHPRI		= 1 << 4, /* high priority */
+	/* WQ_CPU_INTENSIVE：属于特别消耗CPU资源的一类work，这类work的执行会得到系统
+	 * 进程调度器的监督。排在这类work后面的non-CPU-intensive类型的work可能会推迟
+	 * 执行
+	 * */
 	WQ_CPU_INTENSIVE	= 1 << 5, /* cpu intensive workqueue */
 	WQ_SYSFS		= 1 << 6, /* visible in sysfs, see workqueue_sysfs_register() */
 
@@ -336,6 +369,7 @@ enum {
 	WQ_POWER_EFFICIENT	= 1 << 7,
 
 	__WQ_DRAINING		= 1 << 16, /* internal: workqueue is draining */
+	/* 表示同一个时间只能执行一个work */
 	__WQ_ORDERED		= 1 << 17, /* internal: workqueue is ordered */
 	__WQ_LEGACY		= 1 << 18, /* internal: create*_workqueue() */
 	__WQ_ORDERED_EXPLICIT	= 1 << 19, /* internal: alloc_ordered_workqueue() */
