@@ -199,7 +199,9 @@
 
 	pcie0: pcie@f8000000 {
 		compatible = "rockchip,rk3399-pcie";
+		/* Region_0: 32MB Configuration */
 		reg = <0x0 0xf8000000 0x0 0x2000000>,
+		/* PcieHost: 8M client Register Set & 8M core Register Set*/
 		      <0x0 0xfd000000 0x0 0x1000000>;
 		reg-names = "axi-base", "apb-base";
 		device_type = "pci";
@@ -227,7 +229,9 @@
 		       <&pcie_phy 2>, <&pcie_phy 3>;
 		phy-names = "pcie-phy-0", "pcie-phy-1",
 			    "pcie-phy-2", "pcie-phy-3";
+		/* Region 1-30: 30M for Mem */
 		ranges = <0x82000000 0x0 0xfa000000 0x0 0xfa000000 0x0 0x1e00000>,
+		/* Region 31: 1M for IO */
 			 <0x81000000 0x0 0xfbe00000 0x0 0xfbe00000 0x0 0x100000>;
 		resets = <&cru SRST_PCIE_CORE>, <&cru SRST_PCIE_MGMT>,
 			 <&cru SRST_PCIE_MGMT_STICKY>, <&cru SRST_PCIE_PIPE>,

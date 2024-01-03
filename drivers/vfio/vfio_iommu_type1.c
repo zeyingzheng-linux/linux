@@ -63,10 +63,12 @@ MODULE_PARM_DESC(dma_entry_limit,
 		 "Maximum number of user DMA mappings per container (65535).");
 
 struct vfio_iommu {
+	/* 用来链接所有的 vfio_domain */
 	struct list_head	domain_list;
 	struct list_head	iova_list;
 	struct vfio_domain	*external_domain; /* domain for external user */
 	struct mutex		lock;
+	/* 用来表示该 container 中DMA重定向的映射表，即GPA到HPA的转换 */
 	struct rb_root		dma_list;
 	struct blocking_notifier_head notifier;
 	unsigned int		dma_avail;
@@ -1495,6 +1497,7 @@ unwind:
 	return ret;
 }
 
+/* 锁住内存，然后将锁住的内存与指定的设备iova进行映射，会调用底层iommu */
 static int vfio_pin_map_dma(struct vfio_iommu *iommu, struct vfio_dma *dma,
 			    size_t map_size)
 {
@@ -1604,6 +1607,8 @@ static int vfio_dma_do_map(struct vfio_iommu *iommu,
 		goto out_unlock;
 	}
 
+	/* 查找指定的映射是否已经存在，不存在的情况会分配一个vfio_dma
+	 * 并初始化，将其挂到vfio_iommu的dma_list二叉树上 */
 	dma = vfio_find_dma(iommu, iova, size);
 	if (set_vaddr) {
 		if (!dma) {
@@ -2252,6 +2257,9 @@ static void vfio_iommu_iova_insert_copy(struct vfio_iommu *iommu,
 	list_splice_tail(iova_copy, iova);
 }
 
+/* 将一个iommu_group附加到一个vfio_iommu中，这个过程主要是
+ * 与底层iommu打交道，总之调用该函数后，group下面的所有设备
+ * 信息都会写入到IOMMU硬件 context表中 */
 static int vfio_iommu_type1_attach_group(void *iommu_data,
 					 struct iommu_group *iommu_group)
 {

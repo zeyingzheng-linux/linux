@@ -1097,7 +1097,9 @@ struct ftrace_page {
 #define ENTRY_SIZE sizeof(struct dyn_ftrace)
 #define ENTRIES_PER_PAGE (PAGE_SIZE / ENTRY_SIZE)
 
+/* ftrace起始地址，初始化位置 ftrace_process_locs */
 static struct ftrace_page	*ftrace_pages_start;
+/* 同上，用于定位链表中的最后一个pg */
 static struct ftrace_page	*ftrace_pages;
 
 static __always_inline unsigned long
@@ -3897,6 +3899,7 @@ static int ftrace_match(char *str, struct ftrace_glob *g)
 	str = arch_ftrace_match_adjust(str, g->search);
 
 	switch (g->type) {
+	/* 因为我们没有使用正则表达式，所以我们是这个type */
 	case MATCH_FULL:
 		if (strcmp(str, g->search) == 0)
 			matched = 1;
@@ -3979,8 +3982,11 @@ ftrace_match_record(struct dyn_ftrace *rec, struct ftrace_glob *func_g,
 	char str[KSYM_SYMBOL_LEN];
 	char *modname;
 
+	/* such as: cat /proc/kallsyms | grep "schedule" --> xxxx T schedule
+	 * */
 	kallsyms_lookup(rec->ip, NULL, NULL, &modname, str);
 
+	/* 因为不在模块中，所以不执行这个分支 */
 	if (mod_g) {
 		int mod_matches = (modname) ? ftrace_match(modname, mod_g) : 0;
 
@@ -4007,6 +4013,7 @@ func_match:
 			return 1;
 	}
 
+	/* str = "schedule" */
 	return ftrace_match(str, func_g);
 }
 
@@ -4024,6 +4031,7 @@ match_records(struct ftrace_hash *hash, char *func, int len, char *mod)
 	int clear_filter = 0;
 
 	if (func) {
+		/* 进行正则表达式匹配，我们func=schedule，所以是MATCH_FULL */
 		func_g.type = filter_parse_regex(func, len, &func_g.search,
 						 &clear_filter);
 		func_g.len = strlen(func_g.search);
@@ -4050,7 +4058,14 @@ match_records(struct ftrace_hash *hash, char *func, int len, char *mod)
 		if (rec->flags & FTRACE_FL_DISABLED)
 			continue;
 
+		/* func_g.search = "schedule",
+		 * func_g.type = MATCH_FULL,
+		 * func_g.len = strlen("schedule")
+		 * mod_match = NULL
+		 * exclude_mod = 0
+		 * */
 		if (ftrace_match_record(rec, &func_g, mod_match, exclude_mod)) {
+			/* clear_filter = 0 */
 			ret = enter_record(hash, rec, clear_filter);
 			if (ret < 0) {
 				found = ret;
@@ -4858,6 +4873,7 @@ static int ftrace_process_regex(struct ftrace_iterator *iter,
 	struct ftrace_func_command *p;
 	int ret = -EINVAL;
 
+	/* 假设func为schedule */
 	func = strsep(&next, ":");
 
 	if (!next) {
@@ -4909,6 +4925,7 @@ ftrace_regex_write(struct file *file, const char __user *ubuf,
 	/* iter->hash is a local copy, so we don't need regex_lock */
 
 	parser = &iter->parser;
+	/* 将用户字符串写入struct trace_parser结构中 */
 	read = trace_get_user(parser, ubuf, cnt, ppos);
 
 	if (read >= 0 && trace_parser_loaded(parser) &&
@@ -5698,6 +5715,7 @@ static const struct file_operations ftrace_enabled_fops = {
 static const struct file_operations ftrace_filter_fops = {
 	.open = ftrace_filter_open,
 	.read = seq_read,
+	/* echo schedule > set_ftrace_filter */
 	.write = ftrace_filter_write,
 	.llseek = tracing_lseek,
 	.release = ftrace_regex_release,

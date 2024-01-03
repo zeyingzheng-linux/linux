@@ -6140,7 +6140,9 @@ tracing_set_trace_read(struct file *filp, char __user *ubuf,
 
 int tracer_init(struct tracer *t, struct trace_array *tr)
 {
+	/* 重置buffer */
 	tracing_reset_online_cpus(&tr->array_buffer);
+	/* 调用init，假设为graph_trace_init */
 	return t->init(tr);
 }
 
@@ -6396,6 +6398,7 @@ int tracing_set_tracer(struct trace_array *tr, const char *buf)
 
 	tr->current_trace->enabled--;
 
+	/* 将之前的tracer重置 */
 	if (tr->current_trace->reset)
 		tr->current_trace->reset(tr);
 
@@ -6465,6 +6468,9 @@ tracing_set_trace_write(struct file *filp, const char __user *ubuf,
 	for (i = cnt - 1; i > 0 && isspace(buf[i]); i--)
 		buf[i] = 0;
 
+	/* buf = "function_graph"
+	 * struct trace_array 可以认为是一块缓冲区，当ftrace事件发生时
+	 * 需要对这段ring-buffer读写*/
 	err = tracing_set_tracer(tr, buf);
 	if (err)
 		return err;
@@ -7571,6 +7577,7 @@ static const struct file_operations tracing_max_lat_fops = {
 static const struct file_operations set_tracer_fops = {
 	.open		= tracing_open_generic,
 	.read		= tracing_set_trace_read,
+	/* echo function_graph > current_tracer */
 	.write		= tracing_set_trace_write,
 	.llseek		= generic_file_llseek,
 };

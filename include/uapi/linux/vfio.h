@@ -249,15 +249,20 @@ struct vfio_device_info {
  * Return: 0 on success, -errno on failure.
  */
 struct vfio_region_info {
+	/* 表示参数的大小，是输入参数 */
 	__u32	argsz;
+	/* 表示允许的操作，是输出参数 */
 	__u32	flags;
 #define VFIO_REGION_INFO_FLAG_READ	(1 << 0) /* Region supports read */
 #define VFIO_REGION_INFO_FLAG_WRITE	(1 << 1) /* Region supports write */
 #define VFIO_REGION_INFO_FLAG_MMAP	(1 << 2) /* Region supports mmap */
 #define VFIO_REGION_INFO_FLAG_CAPS	(1 << 3) /* Info supports caps */
+	/* 输入参数 */
 	__u32	index;		/* Region index */
 	__u32	cap_offset;	/* Offset within info struct of first cap */
+	/* 输出参数 */
 	__u64	size;		/* Region size (bytes) */
+	/* 输出参数 */
 	__u64	offset;		/* Region offset from start of device fd */
 };
 #define VFIO_DEVICE_GET_REGION_INFO	_IO(VFIO_TYPE, VFIO_BASE + 8)
@@ -705,13 +710,18 @@ struct vfio_region_info_cap_nvlink2_lnkspd {
  * down setup and incrementally increase the vectors as each is enabled.
  */
 struct vfio_irq_info {
+	/* 用户态传入的参数大小，输入参数 */
 	__u32	argsz;
+	/* 表示该中断具有的特性，输出参数 */
 	__u32	flags;
 #define VFIO_IRQ_INFO_EVENTFD		(1 << 0)
 #define VFIO_IRQ_INFO_MASKABLE		(1 << 1)
 #define VFIO_IRQ_INFO_AUTOMASKED	(1 << 2)
 #define VFIO_IRQ_INFO_NORESIZE		(1 << 3)
 	__u32	index;		/* IRQ index */
+	/* 这个count是根据中断类型调用 vfio_pci_get_irq_count 返回的，如
+	 * 对于PCI设备的INTx中断，该函数返回1
+	 * */
 	__u32	count;		/* Number of IRQs within this index */
 };
 #define VFIO_DEVICE_GET_IRQ_INFO	_IO(VFIO_TYPE, VFIO_BASE + 9)

@@ -564,6 +564,7 @@ static int start_graph_tracing(void)
 	struct ftrace_ret_stack **ret_stack_list;
 	int ret, cpu;
 
+	/* 申请存放栈的内存空间 */
 	ret_stack_list = kmalloc_array(FTRACE_RETSTACK_ALLOC_SIZE,
 				       sizeof(struct ftrace_ret_stack *),
 				       GFP_KERNEL);
@@ -577,11 +578,13 @@ static int start_graph_tracing(void)
 			ftrace_graph_init_idle_task(idle_task(cpu), cpu);
 	}
 
+	/* 尝试在FTRACE_RETSTACK_ALLOC_SIZE任务上分配一个返回堆栈数组 */
 	do {
 		ret = alloc_retstack_tasklist(ret_stack_list);
 	} while (ret == -EAGAIN);
 
 	if (!ret) {
+		/* 激活tracepoint */
 		ret = register_trace_sched_switch(ftrace_graph_probe_sched_switch, NULL);
 		if (ret)
 			pr_info("ftrace_graph: Couldn't activate tracepoint"

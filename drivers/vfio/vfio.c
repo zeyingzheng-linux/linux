@@ -39,8 +39,12 @@
 
 static struct vfio {
 	struct class			*class;
+	/* 所有的 vfio_iommu_driver 都会链接到iommu_drivers_list，
+	 * vfio_iommu_driver是 VFIO模块与 iommu driver模块的中间层
+	 * */
 	struct list_head		iommu_drivers_list;
 	struct mutex			iommu_drivers_lock;
+	/* 所有的 vfio_group都会链接到 group_list 成员上 */
 	struct list_head		group_list;
 	struct idr			group_idr;
 	struct mutex			group_lock;
@@ -71,12 +75,15 @@ struct vfio_group {
 	struct kref			kref;
 	int				minor;
 	atomic_t			container_users;
+	/* 指向iommu层 */
 	struct iommu_group		*iommu_group;
 	struct vfio_container		*container;
+	/* 将属于该vfio_group的vfio_device链起来 */
 	struct list_head		device_list;
 	struct mutex			device_lock;
 	struct device			*dev;
 	struct notifier_block		nb;
+	/* 所有vfio_group链接到全局vfio.group_list上 */
 	struct list_head		vfio_next;
 	struct list_head		container_next;
 	struct list_head		unbound_list;
@@ -440,6 +447,7 @@ static struct vfio_group *vfio_create_group(struct iommu_group *iommu_group)
 		return ERR_PTR(minor);
 	}
 
+	/* /dev/vfio/$group_id，fops是vfio_group_fops */
 	dev = device_create(vfio.class, NULL,
 			    MKDEV(MAJOR(vfio.group_devt), minor),
 			    group, "%s%d", group->noiommu ? "noiommu-" : "",
@@ -841,10 +849,13 @@ int vfio_register_group_dev(struct vfio_device *device)
 	if (!device->dev_set)
 		vfio_assign_device_set(device, device);
 
+	/* 表示iommu驱动层的group */
 	iommu_group = iommu_group_get(device->dev);
 	if (!iommu_group)
 		return -EINVAL;
 
+	/* 表示vfio层的group，因为一个group里面可能会有多个设备，所以vfio_group
+	 * 只有在第一个设备进行直通的时候创建，其他时候返回已经创建的即可 */
 	group = vfio_group_get_from_iommu(iommu_group);
 	if (!group) {
 		group = vfio_create_group(iommu_group);
@@ -860,6 +871,9 @@ int vfio_register_group_dev(struct vfio_device *device)
 		iommu_group_put(iommu_group);
 	}
 
+	/* 返回vfio层面的设备结构，即vfio_device，vfio_device只能属于一个
+	 * vfio_group，所以也会判断以下group下是否已经有这个设备了，vifo_device
+	 * 直接内嵌在vfio_pci_core_device里面了 */
 	existing_device = vfio_group_get_device(group, device->dev);
 	if (existing_device) {
 		dev_WARN(device->dev, "Device already exists on group %d\n",
@@ -1095,6 +1109,8 @@ unwind:
 	return ret;
 }
 
+/* arg是用户空间传下来的 vfio iommu驱动类型
+ * 例如 VFIO_TYPE1_IOMMU、VFIO_TYPE1v2_IOMMU */
 static long vfio_ioctl_set_iommu(struct vfio_container *container,
 				 unsigned long arg)
 {
@@ -1139,6 +1155,7 @@ static long vfio_ioctl_set_iommu(struct vfio_container *container,
 		 * magic, allowing a single driver to support multiple
 		 * interfaces if they'd like.
 		 */
+		/* > 0 则表示支持用户传下来的vfio iommu 驱动类型 */
 		if (driver->ops->ioctl(NULL, VFIO_CHECK_EXTENSION, arg) <= 0) {
 			module_put(driver->ops->owner);
 			continue;
@@ -1151,6 +1168,7 @@ static long vfio_ioctl_set_iommu(struct vfio_container *container,
 			continue;
 		}
 
+		/* 将container上的所有group都附加到该vfio_iommu驱动上 */
 		ret = __vfio_container_attach_groups(container, driver, data);
 		if (ret) {
 			driver->ops->release(data);
@@ -1194,6 +1212,7 @@ static long vfio_fops_unl_ioctl(struct file *filep,
 		driver = container->iommu_driver;
 		data = container->iommu_data;
 
+		/* container上所有的设备都要直通给虚拟机 */
 		if (driver) /* passthrough all unrecognized ioctls */
 			ret = driver->ops->ioctl(data, cmd, arg);
 	}
@@ -1213,6 +1232,8 @@ static int vfio_fops_open(struct inode *inode, struct file *filep)
 	init_rwsem(&container->group_lock);
 	kref_init(&container->kref);
 
+	/* 每一个用户态进程在打开 /dev/vfio/vfio的时候内核就会为其分配
+	 * 一个 vfio_container 作为该进程所有VFIO设备的载体。 */
 	filep->private_data = container;
 
 	return 0;
@@ -1393,6 +1414,7 @@ static int vfio_group_set_container(struct vfio_group *group, int container_fd)
 
 	driver = container->iommu_driver;
 	if (driver) {
+		/* vfio iommu层的，主要用来与iommu驱动交互，建立数据结构关系 */
 		ret = driver->ops->attach_group(container->iommu_data,
 						group->iommu_group);
 		if (ret)
@@ -1568,6 +1590,12 @@ static long vfio_group_fops_unl_ioctl(struct file *filep,
 		break;
 	case VFIO_GROUP_GET_DEVICE_FD:
 	{
+		/* 不同于vfio_group会在/dev/vfio下面创建设备给用户访问，
+		 * vfio设备需要用户在 /dev/vfio/$groupid返回的fd上调用
+		 * ioctl(VFIO_GROUP_GET_DEVICE_FD)，buf 保存了用户态进程
+		 * 指定的物理设备地址，函数根据该地址从vfio_group找到对
+		 * 应的vfio_device.
+		 * */
 		char *buf;
 
 		buf = strndup_user((const char __user *)arg, PAGE_SIZE);

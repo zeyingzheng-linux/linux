@@ -1031,6 +1031,8 @@ EXPORT_SYMBOL_GPL(iommu_group_for_each_dev);
  * for the specified device.  If found, the group is returned and the group
  * reference in incremented, else NULL.
  */
+/* 系统在设备初始化的时候会为每一个PCI设备设置其对应的group，保存在表示设备
+ * 的device结构体的iommu_group成员中，所以直接返回就好 */
 struct iommu_group *iommu_group_get(struct device *dev)
 {
 	struct iommu_group *group = dev->iommu_group;

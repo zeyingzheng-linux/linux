@@ -267,6 +267,8 @@ int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 	/* Don't allow our initial saved state to include busmaster */
 	pci_clear_master(pdev);
 
+	/* 每个PCI设备的驱动都需要调用，vfio作为PCI物理驱动的接管者
+	 * 也需要调用该函数 */
 	ret = pci_enable_device(pdev);
 	if (ret)
 		return ret;
@@ -299,6 +301,12 @@ int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 		pci_write_config_word(pdev, PCI_COMMAND, cmd);
 	}
 
+	/* 根据物理设备的配置信息生成 vfio_pci_core_device 的配置信息
+	 * 如vfio_pci_core_device 的pci_config_map 保存物理设备的配置
+	 * 空间数据，rbar数组保存物理设备的7个BAR数据
+	 * 当然这个函数会根据VFIO自己的情况对PCI物理设备的配置空间做
+	 * 一些调整
+	 * */
 	ret = vfio_config_init(vdev);
 	if (ret) {
 		kfree(vdev->pci_saved_state);
@@ -671,7 +679,9 @@ long vfio_pci_core_ioctl(struct vfio_device *core_vdev, unsigned int cmd,
 		if (vdev->reset_works)
 			info.flags |= VFIO_DEVICE_FLAGS_RESET;
 
+		/* 包括物理PCI设备的BAR以及PCI配置空间以及VGA的空间 */
 		info.num_regions = VFIO_PCI_NUM_REGIONS + vdev->num_regions;
+		/* 设备支持的中断类型个数 */
 		info.num_irqs = VFIO_PCI_NUM_IRQS;
 
 		ret = vfio_pci_info_zdev_add_caps(vdev, &caps);
@@ -702,6 +712,7 @@ long vfio_pci_core_ioctl(struct vfio_device *core_vdev, unsigned int cmd,
 			-EFAULT : 0;
 
 	} else if (cmd == VFIO_DEVICE_GET_REGION_INFO) {
+		/* 返回VFIO设备的各个内存区域信息 */
 		struct pci_dev *pdev = vdev->pdev;
 		struct vfio_region_info info;
 		struct vfio_info_cap caps = { .buf = NULL, .size = 0 };
@@ -718,6 +729,7 @@ long vfio_pci_core_ioctl(struct vfio_device *core_vdev, unsigned int cmd,
 		switch (info.index) {
 		case VFIO_PCI_CONFIG_REGION_INDEX:
 			info.offset = VFIO_PCI_INDEX_TO_OFFSET(info.index);
+			/* cfg_size 保存了物理设备的配置空间大小 */
 			info.size = pdev->cfg_size;
 			info.flags = VFIO_REGION_INFO_FLAG_READ |
 				     VFIO_REGION_INFO_FLAG_WRITE;

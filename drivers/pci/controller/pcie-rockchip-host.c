@@ -939,6 +939,7 @@ static int rockchip_pcie_probe(struct platform_device *pdev)
 	if (!dev->of_node)
 		return -ENODEV;
 
+	/* will parse pci_ranges and storage resource to bridge->windows */
 	bridge = devm_pci_alloc_host_bridge(dev, sizeof(*rockchip));
 	if (!bridge)
 		return -ENOMEM;
@@ -971,6 +972,7 @@ static int rockchip_pcie_probe(struct platform_device *pdev)
 	if (err < 0)
 		goto err_deinit_port;
 
+	/* configure atu to tell host how gen the TLP */
 	err = rockchip_pcie_cfg_atu(rockchip);
 	if (err)
 		goto err_remove_irq_domain;

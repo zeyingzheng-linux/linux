@@ -314,11 +314,13 @@ static const char *kallsyms_lookup_buildid(unsigned long addr,
 	namebuf[KSYM_NAME_LEN - 1] = 0;
 	namebuf[0] = 0;
 
+	/* 判断是否在内核中 */
 	if (is_ksym_addr(addr)) {
 		unsigned long pos;
 
 		pos = get_symbol_pos(addr, symbolsize, offset);
 		/* Grab name */
+		/* 获取ip对应的函数名（str） */
 		kallsyms_expand_symbol(get_symbol_offset(pos),
 				       namebuf, KSYM_NAME_LEN);
 		if (modname)

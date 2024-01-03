@@ -28,8 +28,11 @@ struct vfio_device_set {
 };
 
 struct vfio_device {
+	/* 初始化为pci_dev->dev */
 	struct device *dev;
+	/* 初始化为vfio_pci_ops */
 	const struct vfio_device_ops *ops;
+	/* 表示所属的vfio_group */
 	struct vfio_group *group;
 	struct vfio_device_set *dev_set;
 	struct list_head dev_set_list;
@@ -38,6 +41,7 @@ struct vfio_device {
 	refcount_t refcount;
 	unsigned int open_count;
 	struct completion comp;
+	/* 奇怪的名字，用于链接到vfio_group.device_list */
 	struct list_head group_next;
 };
 
