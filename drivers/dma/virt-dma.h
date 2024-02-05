@@ -60,6 +60,7 @@ static inline struct dma_async_tx_descriptor *vchan_tx_prep(struct virt_dma_chan
 
 	dma_async_tx_descriptor_init(&vd->tx, &vc->chan);
 	vd->tx.flags = tx_flags;
+	/* dmaengine_submit */
 	vd->tx.tx_submit = vchan_tx_submit;
 	vd->tx.desc_free = vchan_tx_desc_free;
 
@@ -100,8 +101,12 @@ static inline void vchan_cookie_complete(struct virt_dma_desc *vd)
 	dma_cookie_complete(&vd->tx);
 	dev_vdbg(vc->chan.device->dev, "txd %p[%x]: marked complete\n",
 		 vd, cookie);
+	/* 前面说了传输描述符已经从desc_issue链表上删除掉了，所以现在
+	 * 它不属于任何链表将传输描述符从添加到desc_completed链表
+	 * */
 	list_add_tail(&vd->node, &vc->desc_completed);
 
+	/* see vchan_init */
 	tasklet_schedule(&vc->task);
 }
 
@@ -120,6 +125,11 @@ static inline void vchan_vdesc_fini(struct virt_dma_desc *vd)
 		list_add(&vd->node, &vc->desc_allocated);
 		spin_unlock_irqrestore(&vc->lock, flags);
 	} else {
+		/* 如果当前传输描述符不需要重复使用，则调用desc_free回调
+		 * desc_free回到是在probe函数中注册的，是sun6i_dma_free_desc
+		 * 函数很明显，是用于销毁传输描述符的，因为传输描述符是从
+		 * dma_pool中申请的，用完要还回去
+		 * */
 		vc->desc_free(vd);
 	}
 }

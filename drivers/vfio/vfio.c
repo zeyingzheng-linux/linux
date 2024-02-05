@@ -2431,6 +2431,7 @@ static int __init vfio_init(void)
 	INIT_LIST_HEAD(&vfio.group_list);
 	INIT_LIST_HEAD(&vfio.iommu_drivers_list);
 
+	/* /dev/vfio/vfio */
 	ret = misc_register(&vfio_dev);
 	if (ret) {
 		pr_err("vfio: misc device register failed\n");

@@ -24,8 +24,10 @@ dma_cookie_t vchan_tx_submit(struct dma_async_tx_descriptor *tx)
 	dma_cookie_t cookie;
 
 	spin_lock_irqsave(&vc->lock, flags);
+	/* 为传输描述符分配cookie */
 	cookie = dma_cookie_assign(tx);
 
+	/* 刚才还在vc->desc_allocated，现在转移到vc->desc_submitted */
 	list_move_tail(&vd->node, &vc->desc_submitted);
 	spin_unlock_irqrestore(&vc->lock, flags);
 
@@ -88,6 +90,7 @@ static void vchan_complete(struct tasklet_struct *t)
 	LIST_HEAD(head);
 
 	spin_lock_irq(&vc->lock);
+	/* 将desc_completed链表上的所有传输描述符移动到head链表上 */
 	list_splice_tail_init(&vc->desc_completed, &head);
 	vd = vc->cyclic;
 	if (vd) {
@@ -103,6 +106,7 @@ static void vchan_complete(struct tasklet_struct *t)
 	list_for_each_entry_safe(vd, _vd, &head, node) {
 		dmaengine_desc_get_callback(&vd->tx, &cb);
 
+		/* 将传输描述符去head链表上移除 */
 		list_del(&vd->node);
 		dmaengine_desc_callback_invoke(&cb, &vd->tx_result);
 		vchan_vdesc_fini(vd);
@@ -125,14 +129,24 @@ void vchan_init(struct virt_dma_chan *vc, struct dma_device *dmadev)
 	dma_cookie_init(&vc->chan);
 
 	spin_lock_init(&vc->lock);
+	/* 初始化虚拟通道的各个工作链表，每个链表代表节点的状态
+	 * 虚拟通道的每个传输任务将会在这些链表上流转，以执行不
+	 * 同状态时所需要的操作 */
 	INIT_LIST_HEAD(&vc->desc_allocated);
 	INIT_LIST_HEAD(&vc->desc_submitted);
 	INIT_LIST_HEAD(&vc->desc_issued);
 	INIT_LIST_HEAD(&vc->desc_completed);
 	INIT_LIST_HEAD(&vc->desc_terminated);
 
+	/* 初始化虚拟通道的tasklet，每当虚拟通道完成一次传输任务，
+	 * 就会调用一次vchan_complete
+	 * */
 	tasklet_setup(&vc->task, vchan_complete);
 
+	/* 初始化虚拟通道，将虚拟通道挂在到slave的channel成员上，
+	 * 以后就可以直接通过dma_device找到所有的虚拟通道，例如
+	 * drivers/dma/sun6i-dma.c 的 sun6i_dma_tasklet
+	 * */
 	vc->chan.device = dmadev;
 	list_add_tail(&vc->chan.device_node, &dmadev->channels);
 }

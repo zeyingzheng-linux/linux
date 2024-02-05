@@ -440,6 +440,7 @@ static int sun6i_dma_start_desc(struct sun6i_vchan *vchan)
 		return -EAGAIN;
 	}
 
+	/* 把描述符从desc_issued链表上删除 */
 	list_del(&desc->node);
 
 	pchan->desc = to_sun6i_desc(&desc->tx);
@@ -480,7 +481,9 @@ static void sun6i_dma_tasklet(struct tasklet_struct *t)
 
 		pchan = vchan->phy;
 
+		/* 如果vchan具有pchan，且pchan处于工作状态，接着提交下一个描述符 */
 		if (pchan && pchan->done) {
+			/* 如果已经是最后一个描述符了，就可以释放该channel了 */
 			if (sun6i_dma_start_desc(vchan)) {
 				/*
 				 * No current txd associated with this channel
@@ -500,9 +503,11 @@ static void sun6i_dma_tasklet(struct tasklet_struct *t)
 	for (pchan_idx = 0; pchan_idx < sdev->num_pchans; pchan_idx++) {
 		pchan = &sdev->pchans[pchan_idx];
 
+		/* pchan被占用，continue，但为什么么没有任务也要continue */
 		if (pchan->vchan || list_empty(&sdev->pending))
 			continue;
 
+		/* 取出第一个虚拟通道vchan */
 		vchan = list_first_entry(&sdev->pending,
 					 struct sun6i_vchan, node);
 
@@ -659,6 +664,11 @@ static struct dma_async_tx_descriptor *sun6i_dma_prep_dma_memcpy(
 	v_lli->len = len;
 	v_lli->para = NORMAL_WAIT;
 
+	/* 设置传输通道的burst和width属性。这里需要注意，一般情况下
+	 * 会使用dmaengine_slave_config传进来的配置，但在memcpy类型中，
+	 * 配置是固定的，所以不需要进行配置。其他类型的传输就需要使用
+	 * configs进行配置。
+	 * */
 	burst = convert_burst(8);
 	width = convert_buswidth(DMA_SLAVE_BUSWIDTH_4_BYTES);
 	v_lli->cfg = DMA_CHAN_CFG_SRC_WIDTH(width) |
@@ -672,6 +682,7 @@ static struct dma_async_tx_descriptor *sun6i_dma_prep_dma_memcpy(
 
 	sun6i_dma_dump_lli(vchan, v_lli);
 
+	/* 公用接口，初始化虚拟描述符，后面自然可以得到具体控制器的 */
 	return vchan_tx_prep(&vchan->vc, &txd->vd, flags);
 
 err_txd_free:
@@ -970,9 +981,16 @@ static void sun6i_dma_issue_pending(struct dma_chan *chan)
 
 	spin_lock_irqsave(&vchan->vc.lock, flags);
 
+	/* 将所有在desc_submitted链表上的传输描述符
+	 * 转移到desc_issued链表 */
 	if (vchan_issue_pending(&vchan->vc)) {
 		spin_lock(&sdev->lock);
 
+		/* 如果当前虚拟通道没有绑定了物理通道，且虚拟通道vchan
+		 * 没有挂载到DMA控制器sdev的pending链表上。则将虚拟通道
+		 * vchan挂载到pending链表上，并调度执行tasklet。虚拟通道
+		 * vchan就是我们需要启动传输的通道
+		 * */
 		if (!vchan->phy && list_empty(&vchan->node)) {
 			list_add_tail(&vchan->node, &sdev->pending);
 			tasklet_schedule(&sdev->task);
@@ -1247,6 +1265,7 @@ static const struct of_device_id sun6i_dma_match[] = {
 	{ .compatible = "allwinner,sun8i-a23-dma", .data = &sun8i_a23_dma_cfg },
 	{ .compatible = "allwinner,sun8i-a83t-dma", .data = &sun8i_a83t_dma_cfg },
 	{ .compatible = "allwinner,sun8i-h3-dma", .data = &sun8i_h3_dma_cfg },
+	/* sun8i-v3s.dtsi用的是这个版本 */
 	{ .compatible = "allwinner,sun8i-v3s-dma", .data = &sun8i_v3s_dma_cfg },
 	{ .compatible = "allwinner,sun50i-a64-dma", .data = &sun50i_a64_dma_cfg },
 	{ .compatible = "allwinner,sun50i-a100-dma", .data = &sun50i_a100_dma_cfg },
@@ -1310,6 +1329,7 @@ static int sun6i_dma_probe(struct platform_device *pdev)
 	INIT_LIST_HEAD(&sdc->pending);
 	spin_lock_init(&sdc->lock);
 
+	/* 初始化DMA能力，可以在内核文档中查阅 */
 	dma_cap_set(DMA_PRIVATE, sdc->slave.cap_mask);
 	dma_cap_set(DMA_MEMCPY, sdc->slave.cap_mask);
 	dma_cap_set(DMA_SLAVE, sdc->slave.cap_mask);
@@ -1318,11 +1338,16 @@ static int sun6i_dma_probe(struct platform_device *pdev)
 	INIT_LIST_HEAD(&sdc->slave.channels);
 	sdc->slave.device_free_chan_resources	= sun6i_dma_free_chan_resources;
 	sdc->slave.device_tx_status		= sun6i_dma_tx_status;
+	/* dma_async_issue_pending */
 	sdc->slave.device_issue_pending		= sun6i_dma_issue_pending;
 	sdc->slave.device_prep_slave_sg		= sun6i_dma_prep_slave_sg;
+	/* dmaengine_prep_dma_memcpy */
 	sdc->slave.device_prep_dma_memcpy	= sun6i_dma_prep_dma_memcpy;
 	sdc->slave.device_prep_dma_cyclic	= sun6i_dma_prep_dma_cyclic;
 	sdc->slave.copy_align			= DMAENGINE_ALIGN_4_BYTES;
+	/* dmaengine_slave_config：driver申请到一个为自己使用的DMA channel之后，
+	 * 需要根据自身的实际情况，以及DMA controller的能力，对该channel进行一些配置
+	 * */
 	sdc->slave.device_config		= sun6i_dma_config;
 	sdc->slave.device_pause			= sun6i_dma_pause;
 	sdc->slave.device_resume		= sun6i_dma_resume;
@@ -1381,6 +1406,7 @@ static int sun6i_dma_probe(struct platform_device *pdev)
 		struct sun6i_vchan *vchan = &sdc->vchans[i];
 
 		INIT_LIST_HEAD(&vchan->node);
+		/* 注册描述符销毁回调 */
 		vchan->vc.desc_free = sun6i_dma_free_desc;
 		vchan_init(&vchan->vc, &sdc->slave);
 	}
@@ -1418,6 +1444,7 @@ static int sun6i_dma_probe(struct platform_device *pdev)
 		goto err_irq_disable;
 	}
 
+	/* dma_request_chan will call sun6i_dma_of_xlate */
 	ret = of_dma_controller_register(pdev->dev.of_node, sun6i_dma_of_xlate,
 					 sdc);
 	if (ret) {

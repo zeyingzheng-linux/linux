@@ -635,6 +635,7 @@ static struct dma_chan *private_candidate(const dma_cap_mask_t *mask,
 				return NULL;
 		}
 
+	/* sun6i举例子的话，vchan_init里面挂的队列  */
 	list_for_each_entry(chan, &dev->channels, device_node) {
 		if (chan->client_count) {
 			dev_dbg(dev->dev, "%s: %s busy\n",
