@@ -330,6 +330,17 @@ enum {
 	/* WQ_MEM_RECLAIM：当内存紧张时，创建新的工作线程可能会失败，系统还有一个
 	 * rescuer工作线程会接管这种情况。
 	 * */
+	/* 从看代码的角度，貌似是这么工作的，进入worker threads的时候，一般都会保证
+	 * 有一个idle work在pool里面，理论上只有这样，才能解决死锁的问题。例如AB
+	 * 2个work在一个pool，A一定是依赖B的执行的结果，那么A执行过程中睡眠，B就没法
+	 * 执行了，最后就死锁了，如果由一个idle在pool，那么在A睡眠的时候，还能唤醒另一
+	 * 个来执行A，最后解除死锁。
+	 * 而，对于每一个标记WQ_MEM_RECLAIM flag的work queue，系统都会创建一个rescuer
+	 * thread，它也是用来解除死锁的，因为有时候上面创建一个idle的时候可能会失败，
+	 * 那么这时候导致创建超时，rescuer就会介入，移走所有的work去处理，最后当前的
+	 * 进程就往下走，可能会变成idle了，rescuer如果遇到睡眠，就唤醒当前这个idle了。
+	 * 记住这之间是有 pool->lock在保证顺序关系的，wq_worker_sleeping也加了这个锁
+	 * */
 	WQ_MEM_RECLAIM		= 1 << 3, /* may be used for memory reclaim */
 	/* WQ_HIGHPRI：属于高优先级的工作线程池，即比较低的nice值
 	 * */
@@ -337,6 +348,11 @@ enum {
 	/* WQ_CPU_INTENSIVE：属于特别消耗CPU资源的一类work，这类work的执行会得到系统
 	 * 进程调度器的监督。排在这类work后面的non-CPU-intensive类型的work可能会推迟
 	 * 执行
+	 * */
+	/* 如果是耗CPU类型的work，那么假设ABCD这4个work一起执行的之后，A是CPU类型的，
+	 * 它的一直执行会影响到BCD的执行，因为 running bit会被拉上去，那么设置这个标志
+	 * 位，内核会将 running bit暂时拉下来一下，这样后面会多创建一个worker出来，这
+	 * 样，后面BCD就不会因为CPU消耗型的A任务被耽搁了。
 	 * */
 	WQ_CPU_INTENSIVE	= 1 << 5, /* cpu intensive workqueue */
 	WQ_SYSFS		= 1 << 6, /* visible in sysfs, see workqueue_sysfs_register() */

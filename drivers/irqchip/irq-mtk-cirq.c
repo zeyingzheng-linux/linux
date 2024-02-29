@@ -295,4 +295,8 @@ out_free:
 	return ret;
 }
 
+/* 你会发现dts没有interrupts这个东西了，注意irq_domain_alloc_irqs_parent
+ * 它是在这个时候给gic那边做hwirq & virq的映射的，这种只有一层virq，对应
+ * 了两层的不同的hwirq，你会发现它的mask会mask自己和它的父亲mtk_cirq_mask
+ * */
 IRQCHIP_DECLARE(mtk_cirq, "mediatek,mtk-cirq", mtk_cirq_of_init);

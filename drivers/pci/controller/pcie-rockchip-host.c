@@ -510,6 +510,9 @@ static irqreturn_t rockchip_pcie_client_irq_handler(int irq, void *arg)
 	return IRQ_HANDLED;
 }
 
+/* 这种是chain interrupt，因为对于legacy中断来说，pcie控制器还要去区分
+ * 到底是INT A/B/C/D的哪个中断发生了，所以从这个角度看它自己又是一个
+ * irq_domain了，在设备树有给它建立了一个虚拟的中断控制器pcie0_intc  */
 static void rockchip_pcie_legacy_int_handler(struct irq_desc *desc)
 {
 	struct irq_chip *chip = irq_desc_get_chip(desc);

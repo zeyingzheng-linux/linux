@@ -1504,6 +1504,7 @@ retry:
 	 * 对于BOUND类型，直接用本地CPU对应的pool_workqueue枢纽
 	 * 对于UNBOUND类型，workqueue_struct数据结构中的 numa_pwq_tbl数组存放
 	 * 着每个系统节点对应的UNBOUND类型的pool_workqueue枢纽*/
+	/* 这里选择的pool wq只是备选的，可能用也可能不用，它有可能会被替换掉 */
 	if (wq->flags & WQ_UNBOUND) {
 		if (req_cpu == WORK_CPU_UNBOUND)
 			cpu = wq_select_unbound_cpu(raw_smp_processor_id());
@@ -1526,6 +1527,11 @@ retry:
 	 * 就要看下work是不是正运行在CPU0的work_pool中的某个工作线程上，如果是，那么这
 	 * 次的work应该继续添加在CPU0的worker_pool上，因为这样可以利用缓存热度。
 	 * */
+	/* 主要也是要避免重入，因为有时候该work可能正在其他的worker thread上执行，
+	 * 在这种情况下，为了确保work的callback function不会重入，该work最好还是挂在
+	 * 原先那个worker thread pool上
+	 * 挺奇葩的把，set_work_pool_and_clear_pending 之后才run callback
+	 * */
 	if (last_pool && last_pool != pwq->pool) {
 		struct worker *worker;
 
@@ -1536,6 +1542,7 @@ retry:
 		 * */
 		worker = find_worker_executing_work(last_pool, work);
 
+		/* 是嘛，主要是为了避免重入嘛 */
 		if (worker && worker->current_pwq->wq == wq) {
 			pwq = worker->current_pwq;
 		} else {
@@ -1622,7 +1629,7 @@ bool queue_work_on(int cpu, struct workqueue_struct *wq,
 
 	/* 将work加入工作队列是在关闭本地中断的情况下进行的，如果打开中断的话，
 	 * 那么可能在处理中断返回时调度其他进程，其他进程可能调用cancel_delayed
-	 * _work函数获取了PENDING bit。
+	 * _work函数获取了PENDING bit。注意，在执行work前会清除该bit
 	 * */
 	local_irq_save(flags);
 
@@ -2509,6 +2516,14 @@ static int worker_thread(void *__worker)
 	/* tell the scheduler that this is a workqueue worker */
 	/* 告诉调度器，我是一个worker，因为调度器和worker是有交互的，动态
 	 * 管理worker的唤醒睡眠等，wq_worker_sleeping */
+
+	/* 有了这样一个flag，调度器在调度当前进程sleep的时候可以检查这个
+	 * 准备sleep的进程是否是一个worker线程，如果是的话，那么调度器不能
+	 * 鲁莽的调度到其他的进程，这时候，还需要找到该worker对应的线程池，
+	 * 唤醒一个idle的worker线程。通过workqueue模块和调度器模块的交互，
+	 * 当work A被阻塞后（处理该work的worker线程进入sleep），调度器会
+	 * 唤醒其他的worker线程来处理其他的work B，work C
+	 * */
 	set_pf_worker(true);
 woke_up:
 	raw_spin_lock_irq(&pool->lock);
@@ -2539,6 +2554,9 @@ recheck:
 	/* do we need to manage? */
 	/* 创建一个新的工作线程后，还需要跳转到recheck检查一遍，因为可能在
 	 * 创建工作线程的过程中，整个线程池的状态又发生了改变 */
+	/* zzy：貌似保证了至少由一个idle在池子里面，因为当前这个睡着了的话，
+	 * 调度器是需要唤醒另一个去处理的。
+	 * */
 	if (unlikely(!may_start_working(pool)) && manage_workers(worker))
 		goto recheck;
 
@@ -2561,7 +2579,8 @@ recheck:
 	/* 对于BOUND类型的工作队列，这里还会增加 worker_pool->nr_running 计数 */
 	worker_clr_flags(worker, WORKER_PREP | WORKER_REBOUND);
 
-	/* 依次处理worker_pool->worklist链表中等待的work */
+	/* 依次处理worker_pool->worklist链表中等待的work，
+	 * worker thread被冻结的时候，会处理完当前所有的work*/
 	do {
 		struct work_struct *work =
 			list_first_entry(&pool->worklist,
@@ -2575,9 +2594,17 @@ recheck:
 			if (unlikely(!list_empty(&worker->scheduled)))
 				process_scheduled_works(worker);
 		} else {
-			/* WORK_STRUCT_LINKED 表示work后面还有其他work，把这些work
-			 * 迁移到worker->scheduled 链表中，然后一并调用process_one_work
-			 * 处理
+			/* WORK_STRUCT_LINKED标记了work是属于linked work，
+			 * 如果是linked work，worker并不直接处理，而是将其挂入
+			 * scheduled work list，然后调用process_scheduled_works
+			 * 来处理。毫无疑问，process_scheduled_works也是调用
+			 * process_one_work来处理一个一个scheduled work list上的
+			 * work。scheduled work list并非仅仅应用在linked work，
+			 * 在worker处理work的时候，有一个原则要保证：同一个work
+			 * 不能被同一个cpu上的多个worker同时执行。这时候，如果
+			 * worker发现自己要处理的work正在被另外一个worker线程处理，
+			 * 那么本worker线程将不处理该work，只需要挂入正在执行该
+			 * work的worker线程的scheduled work list即可
 			 * */
 			move_linked_works(work, &worker->scheduled, NULL);
 			process_scheduled_works(worker);
@@ -4143,11 +4170,34 @@ apply_wqattrs_prepare(struct workqueue_struct *wq,
 	 * it even if we don't use it immediately.
 	 */
 	/* 查找或者新建一个pool_workqueue */
+	/* 缺省情况下，挂入unbound workqueue的works最好是考虑NUMA Affinity，
+	 * 这样可以获取更好的性能。当然，实际上用户可以通过workqueue.
+	 * disable_numa这个内核参数来关闭这个特性，这时候，系统需要一个default 
+	 * pool workqueue（workqueue_struct的dfl_pwq成员），所有的per node的
+	 * pool workqueue指针都是执行default pool workqueue。
+	 * workqueue.disable_numa是enable的情况下是否不需要default pool workqueue
+	 * 了呢？也不是，我们举一个简单的例子，一个系统的构成是这样的：node 0中有
+	 * CPU A和B，node 1中有CPU C和D，node 2中有CPU E和F，假设workqueue的
+	 * attribute规定work只能在CPU A 和C上运行，那么在node 0和node 1中创建自己
+	 * 的pool workqueue是ok的，毕竟node 0中有CPU A，node 1中有CPU C，该node创
+	 * 建的worker thread可以在A或者C上运行。但是对于node 2节点，没有任何的CPU
+	 * 允许处理该workqueue的work，在这种情况下，没有必要为node 2建立自己的pool
+	 * workqueue，而是使用default pool workqueue
+	 * */
 	ctx->dfl_pwq = alloc_unbound_pwq(wq, new_attrs);
 	if (!ctx->dfl_pwq)
 		goto out_free;
 
 	for_each_node(node) {
+		/* 值得一提的是wq_calc_node_cpumask这个函数，这个函数会根据该node的
+		 * cpu情况以及workqueue attribute中的cpumask成员来更新tmp_attrs->
+		 * cpumask，因此，在pwq_tbl[node] = alloc_unbound_pwq(wq, tmp_attrs)
+		 * ; 这行代码中，为该node分配pool workqueue对应的线程池的时候，去掉
+		 * 了本node中不存在的cpu。例如node 0中有CPU A和B，workqueue的attribute
+		 * 规定work只能在CPU A 和C上运行，那么创建node 0上的pool workqueue以及
+		 * 对应的worker thread pool的时候，需要删除CPU C，也就是说，node 0上的
+		 * 线程池的属性中的cpumask仅仅支持CPU A了
+		 * */
 		if (wq_calc_node_cpumask(new_attrs, node, -1, tmp_attrs->cpumask)) {
 			ctx->pwq_tbl[node] = alloc_unbound_pwq(wq, tmp_attrs);
 			if (!ctx->pwq_tbl[node])
@@ -4478,9 +4528,26 @@ struct workqueue_struct *alloc_workqueue(const char *fmt,
 	 * 决定的。per-cpu类型的工作队列会让空闲的cpu从空闲状态唤醒，从而增加了功耗
 	 * 。如果系统配置了CONFIG_WQ_POWER_EFFICIENT_DEFAULT选项，那么创建工作队列
 	 * 会把标记了WQ_POWER_EFFICIENT的工作队列设置成UNBOUND类型，这样进程调度器
-	 * 就可以参与选择cpu来执行了。
+	 * 就可以选择没睡眠的cpu来执行了。
 	 * WQ_POWER_EFFICIENT 只是不想让cpu固定的睡眠、唤醒、睡眠、唤醒，而是由调度
-	 * 器来决定选择哪个cpu唤醒比较好。
+	 * 器来决定选择哪个不idle的cpu来执行就好。
+	 * */
+	/* 我们来一个例子辅助理解上面的内容。在t1时刻，work被调度到CPU A上执行，
+	 * t2时刻work执行完毕，CPU A进入idle，t3时刻有一个新的work需要处理，这
+	 * 时候调度work到那个CPU会好些呢？是处于working状态的CPU B还是处于idle
+	 * 状态的CPU A呢？如果调度到CPU A上运行，那么，由于之前处理过work，其
+	 * cache内容新鲜热辣，处理起work当然是得心应手，速度很快，但是，这需要
+	 * 将CPU A从idle状态中唤醒。选择CPU B呢就不存在将CPU 从idle状态唤醒，
+	 * 从而获取power saving方面的好处
+	 * 我们再来检视per cpu thread pool和unbound thread pool。当workqueue收到
+	 * 一个要处理的work，如果该workqueue是unbound类型的话，那么该work由unbound
+	 * thread pool处理并把调度该work去哪一个CPU执行这样的策略交给系统的调度器
+	 * 模块来完成，对于scheduler而言，它会考虑CPU core的idle状态，从而尽可能的
+	 * 让CPU保持在idle状态，从而节省了功耗。因此，如果一个workqueue有WQ_UNBOUND
+	 * 这样的flag，则说明该workqueue上挂入的work处理是考虑到power saving的。如果
+	 * workqueue没有WQ_UNBOUND flag，则说明该workqueue是per cpu的，这时候，调度
+	 * 哪一个CPU core运行worker thread来处理work已经不是scheduler可以控制的了，
+	 * 这样，也就间接影响了功耗
 	 * */
 	if ((flags & WQ_POWER_EFFICIENT) && wq_power_efficient)
 		flags |= WQ_UNBOUND;

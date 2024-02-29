@@ -78,6 +78,10 @@
 /* 属于特定某个CPU的中断 */
 #define IRQF_PERCPU		0x00000400
 /* 禁止多CPU之间的中断均衡 */
+/* 这也是和multi-processor相关的一个flag。对于那些可以在多个CPU之间共享的中断，
+ * 具体送达哪一个processor是有策略的，我们可以在多个CPU之间进行平衡。如果你不
+ * 想让你的中断参与到irq balancing的过程中那么就设定这个flag
+ * */
 #define IRQF_NOBALANCING	0x00000800
 /* 中断被用作轮询 */
 #define IRQF_IRQPOLL		0x00001000
@@ -87,12 +91,26 @@
  * 3. 如果执行 request_threaded_irq 时，主处理程序是NULL且中断控制器不支持硬件ONESHOT功能
  * ，那应该显式地设置这个标志
  * */
+/* one shot本身的意思的只有一次的，结合到中断这个场景，则表示中断是一次性触发的，不能嵌套。
+ * 对于primary handler，当然是不会嵌套，但是对于threaded interrupt handler，我们有两种选择
+ * ，一种是mask该interrupt source，另外一种是unmask该interrupt source。一旦mask住该
+ * interrupt source，那么该interrupt source的中断在整个threaded interrupt handler处理过程
+ * 中都是不会再次触发的，也就是one shot了。这种handler不需要考虑重入问题。具体是否要设定
+ * one shot的flag是和硬件系统有关的，我们举一个例子，比如电池驱动，电池里面有一个电量计，
+ * 是使用HDQ协议进行通信的，电池驱动会注册一个threaded interrupt handler，在这个handler中
+ * ，会通过HDQ协议和电量计进行通信。对于这个handler，通过HDQ进行通信是需要一个完整的HDQ交
+ * 互过程，如果中间被打断，整个通信过程会出问题，因此，这个handler就必须是one shot的
+ * */
 #define IRQF_ONESHOT		0x00002000
 /* 在系统睡眠过程中不要关闭该中断 */
 #define IRQF_NO_SUSPEND		0x00004000
 /* 在系统唤醒过程中必须强制打开该中断 */
 #define IRQF_FORCE_RESUME	0x00008000
 /* 表示该中断不会被线程化 */
+/* 有些low level的interrupt是不能线程化的（例如系统timer的中断），这个flag就是起这个作用
+ * 的。另外，有些级联的interrupt controller对应的IRQ也是不能线程化的（例如secondary GIC
+ * 对应的IRQ），它的线程化可能会影响一大批附属于该interrupt controller的外设的中断响应延迟
+ * */
 #define IRQF_NO_THREAD		0x00010000
 #define IRQF_EARLY_RESUME	0x00020000
 #define IRQF_COND_SUSPEND	0x00040000

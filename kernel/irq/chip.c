@@ -65,6 +65,9 @@ EXPORT_SYMBOL(irq_set_chip);
  *	@irq:	irq number
  *	@type:	IRQ_TYPE_{LEVEL,EDGE}_* value - see include/linux/irq.h
  */
+/* 对于irq_set_irq_type这个接口函数，它是for 1-N mode的interrupt source
+ * 使用的。如果底层设定该interrupt是per CPU的，那么irq_set_irq_type要返回错误
+ * */
 int irq_set_irq_type(unsigned int irq, unsigned int type)
 {
 	unsigned long flags;
@@ -524,6 +527,10 @@ static bool irq_may_run(struct irq_desc *desc)
 	/*
 	 * Handle a potential concurrent poll on a different core.
 	 */
+	/* IRQS_POLL_INPROGRESS标识了该IRQ正在被polling，如果没有被轮询，
+	 * 那么返回false，进行正常的设定pending标记、mask and ack中断。
+	 * 如果正在被轮询，那么需要等待poll结束。
+	 * */
 	return irq_check_poll(desc);
 }
 
@@ -633,8 +640,14 @@ static void cond_unmask_irq(struct irq_desc *desc)
 void handle_level_irq(struct irq_desc *desc)
 {
 	raw_spin_lock(&desc->lock);
+	/* 电平触发，必须要mask，不然就有不应该的中断风暴 */
 	mask_ack_irq(desc);
 
+	/* 对于电平触发的high level handler，我们一开始就mask并ack了中断，
+	 * 因此后续specific handler因该是串行化执行的，为何要判断in
+	 * progress标记呢？不要忘记spurious interrupt，那里会直接调用
+	 * handler来处理spurious interrupt
+	 * */
 	if (!irq_may_run(desc))
 		goto out_unlock;
 
@@ -644,6 +657,12 @@ void handle_level_irq(struct irq_desc *desc)
 	 * If its disabled or no action available
 	 * keep it masked and get out of here
 	 */
+	/* 1. 没注册，可能被别人free掉了
+	 * 2. 该中断被其他的CPU disable了。如果该中断被其他的CPU disable了，
+	 * 本就不应该继续执行该中断的specific handler，我们也是设定pending状态，
+	 * mask and ack中断就退出了。当其他CPU的代码离开临界区，enable 该中断
+	 * 的时候，软件会检测pending状态并resend该中断
+	 * */
 	if (unlikely(!desc->action || irqd_irq_disabled(&desc->irq_data))) {
 		desc->istate |= IRQS_PENDING;
 		goto out_unlock;
@@ -652,6 +671,12 @@ void handle_level_irq(struct irq_desc *desc)
 	kstat_incr_irqs_this_cpu(desc);
 	handle_irq_event(desc);
 
+	/* 为何是有条件的unmask该IRQ？正常的话当然是umask就OK了，不过有些
+	 * threaded interrupt要求是one shot的（首次中断，specific handler
+	 * 中开了一枪，wakeup了irq handler thread，如果允许中断嵌套，那么
+	 * 在specific handler会多次开枪，这也就不是one shot了，有些IRQ的
+	 * handler thread要求是one shot，也就是不能嵌套specific handler）
+	 * */
 	cond_unmask_irq(desc);
 
 out_unlock:
@@ -775,12 +800,29 @@ EXPORT_SYMBOL_GPL(handle_fasteoi_nmi);
  *	the handler was running. If all pending interrupts are handled, the
  *	loop is left.
  */
+/* ARM＋GIC组成的系统不符合这个类型。虽然GIC提供了IAR
+ * （Interrupt Acknowledge Register）寄存器来让ARM来ack中断，
+ * 但是，在调用high level handler之前，中断处理程序需要通过读取
+ * IAR寄存器获得HW interrpt ID并转换成IRQ number，因此实际上，
+ * 对于GIC的irq chip，它是无法提供本场景中的irq_ack函数的。很多
+ * GPIO type的interrupt controller符合上面的条件，它们会提供pending
+ * 状态寄存器，读可以获取pending状态，而向pending状态寄存器写1可以
+ * ack该中断，让interrupt controller可以继续触发下一次中断
+ * */
 void handle_edge_irq(struct irq_desc *desc)
 {
+	/* 因为这时候中断是关闭的，不会有本CPU的进来，只需要考虑其他CPU即可 */
 	raw_spin_lock(&desc->lock);
 
 	desc->istate &= ~(IRQS_REPLAY | IRQS_WAITING);
 
+	/* 如果对应中断线的中断已经有其他CPU在处理了，那么仅仅设定pending
+	 * 状态（为了委托正在处理该中断的CPU进行处理），mask & ack 就退出
+	 * 我们这时候是mask掉的，因为pending一次就好了，不嵌套了，太复杂了
+	 * 因为中断完全是异步的，由可能pending的标记可能在另外的CPU上已经
+	 * 修改为replay的标记了，而且记录那么多次pending真的有意义吗？
+	 * 所以就来pending状态就好了，不再考虑pending嵌套的情况了
+	 * */
 	if (!irq_may_run(desc)) {
 		desc->istate |= IRQS_PENDING;
 		mask_ack_irq(desc);
@@ -791,6 +833,11 @@ void handle_edge_irq(struct irq_desc *desc)
 	 * If its disabled or no action available then mask it and get
 	 * out of here.
 	 */
+	/* 跟上面类似也是设置pending，然后mask & ack 退出
+	 * 1. 中断被其他CPU disable了，本就不该执行，当其他CPU的代码离开临界区
+	 *    unmask该中断的时候，软件就会检测pending状态并resend该中断
+	 * 2. 该中断描述符没有注册specific handler
+	 * */
 	if (irqd_irq_disabled(&desc->irq_data) || !desc->action) {
 		desc->istate |= IRQS_PENDING;
 		mask_ack_irq(desc);
@@ -800,9 +847,20 @@ void handle_edge_irq(struct irq_desc *desc)
 	kstat_incr_irqs_this_cpu(desc);
 
 	/* Start handling the irq */
+	/* 中断控制器的ack，表示中断控制器准备好接收下一次中断了，再次触发的
+	 * 中断会调度到其他的CPU上，其他CPU一般是设置pending，然后委托正在处理
+	 * 中断的CPU去处理
+	 * 注意，对于边沿触发的中断，一旦外设边沿产生，中断即锁存到中断控制器里，
+	 * 如果中断控制器没有发起ack的动作的话，那么外设和中断控制器之间的那条线
+	 * 会一直保持，这样外设就没办法再次产生边沿了，只有ack之后，电平才会翻转
+	 * 为idle状态，外设才可能再次产生边沿，当然也只有在ack之后，中断控制器才
+	 * 能再次接收中断 */
 	desc->irq_data.chip->irq_ack(&desc->irq_data);
 
 	do {
+		/* 在执行specific handler的时候，是不带锁的，handle_irq_event
+		 * 所以可能其他CPU free irq了，可能request_irq再打开
+		 * */
 		if (unlikely(!desc->action)) {
 			mask_irq(desc);
 			goto out_unlock;
@@ -813,6 +871,15 @@ void handle_edge_irq(struct irq_desc *desc)
 		 * one, we could have masked the irq.
 		 * Reenable it, if it was not disabled in meantime.
 		 */
+		/* 处于pending意味着有其他CPU又触发了该中断，委托了本CPU处理，这时
+		 * 应该umask刚才被mask的中断，那么后续的中断就可以触发，由其他CPU
+		 * 处理（仍然是设置pending，委托当前正在处理中断的CPU处理）
+		 * zzy: 但注意IRQD_IRQ_INPROGRESS是在handle_irq_event设置后又清除的?
+		 * 因为一开始lock住了，只有在handle_irq_event才unlock然后又lock上，
+		 * 所以就可以解释为什么irq_may_run判断IRQD_IRQ_INPROGRESS，因为lock
+		 * 住，其他cpu也进不去，只有正在处理的时候才能偷偷进去，然后设置
+		 * pending立马返回，太细了
+		 * */
 		if (unlikely(desc->istate & IRQS_PENDING)) {
 			if (!irqd_irq_disabled(&desc->irq_data) &&
 			    irqd_irq_masked(&desc->irq_data))

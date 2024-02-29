@@ -637,6 +637,7 @@ EXPORT_SYMBOL_GPL(irq_domain_associate_many);
  * or radix tree to store the mapping, but the irq controller can optimize
  * the revmap path by using the hwirq directly.
  */
+/* 给no map 那种类型的中断控制器使用的 */
 unsigned int irq_create_direct_mapping(struct irq_domain *domain)
 {
 	struct device_node *of_node;
@@ -780,6 +781,7 @@ unsigned int irq_create_fwspec_mapping(struct irq_fwspec *fwspec)
 		return 0;
 	}
 
+	/* 设备树中解析出hwirq，type */
 	if (irq_domain_translate(domain, fwspec, &hwirq, &type))
 		return 0;
 
@@ -794,6 +796,7 @@ unsigned int irq_create_fwspec_mapping(struct irq_fwspec *fwspec)
 	 * If we've already configured this interrupt,
 	 * don't do it again, or hell will break loose.
 	 */
+	/* hwirq已经被映射过，直接返回 */
 	virq = irq_find_mapping(domain, hwirq);
 	if (virq) {
 		/*
@@ -823,11 +826,13 @@ unsigned int irq_create_fwspec_mapping(struct irq_fwspec *fwspec)
 	}
 
 	if (irq_domain_is_hierarchy(domain)) {
+		/* find a virq and irq_domain->ops->alloc设置irq_desc */
 		virq = irq_domain_alloc_irqs(domain, 1, NUMA_NO_NODE, fwspec);
 		if (virq <= 0)
 			return 0;
 	} else {
 		/* Create mapping */
+		/* find a virq and irq_domain->ops->map设置irq_desc */
 		virq = irq_create_mapping(domain, hwirq);
 		if (!virq)
 			return virq;
@@ -849,6 +854,7 @@ unsigned int irq_create_fwspec_mapping(struct irq_fwspec *fwspec)
 }
 EXPORT_SYMBOL_GPL(irq_create_fwspec_mapping);
 
+/* 创建映射，并返回对应的IRQ number */
 unsigned int irq_create_of_mapping(struct of_phandle_args *irq_data)
 {
 	struct irq_fwspec fwspec;

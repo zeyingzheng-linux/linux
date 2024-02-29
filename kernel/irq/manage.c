@@ -1355,6 +1355,9 @@ static int irq_setup_forced_threading(struct irqaction *new)
 	if (!force_irqthreads())
 		return 0;
 	/* 但凡有一个成立，则不符合中断线程化要求 */
+	/* IRQF_NO_THREAD是用户层面的看法（本身）
+	 * _IRQ_NOTHREAD是底层中断描述符的看法（调用者）
+	 * IRQF_ONESHOT说明该中断已经被线程化了，所以直接返回 */
 	if (new->flags & (IRQF_NO_THREAD | IRQF_PERCPU | IRQF_ONESHOT))
 		return 0;
 
@@ -1362,6 +1365,7 @@ static int irq_setup_forced_threading(struct irqaction *new)
 	 * No further action required for interrupts which are requested as
 	 * threaded interrupts already
 	 */
+	/* 意味着只提供了thread_fn，那必然是线程化了已经 */
 	if (new->handler == irq_default_primary_handler)
 		return 0;
 
@@ -1373,6 +1377,7 @@ static int irq_setup_forced_threading(struct irqaction *new)
 	 * thread handler. We force thread them as well by creating a
 	 * secondary action.
 	 */
+	/* 提供了handler和thread_fn，这时候两个都线程化掉 */
 	if (new->handler && new->thread_fn) {
 		/* Allocate the secondary action */
 		new->secondary = kzalloc(sizeof(struct irqaction), GFP_KERNEL);
@@ -2192,6 +2197,11 @@ int request_threaded_irq(unsigned int irq, irq_handler_t handler,
 	 * it cannot be set along with IRQF_NO_SUSPEND.
 	 */
 	/* 共享中断需要 dev_id 这个参数传给它，不然没法区分是否自己的中断发生了 */
+	/* 不能说没有 devi_id就不能区分，实际主要是：
+	 * 1. 可以传具体驱动的结构体给中断处理，利于更快的判断是否自己的中断，即
+	 *    不用静态全局变量了
+	 * 2. free_irq的时候，需要它才能找到到底释放IRQ line里面的哪个irq action
+	 * */
 	if (((irqflags & IRQF_SHARED) && !dev_id) ||
 	    ((irqflags & IRQF_SHARED) && (irqflags & IRQF_NO_AUTOEN)) ||
 	    (!(irqflags & IRQF_SHARED) && (irqflags & IRQF_COND_SUSPEND)) ||

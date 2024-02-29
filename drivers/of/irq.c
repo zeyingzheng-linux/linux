@@ -392,6 +392,7 @@ int of_irq_get(struct device_node *dev, int index)
 	struct of_phandle_args oirq;
 	struct irq_domain *domain;
 
+	/* 解析设备树的信息，会找到irq parent，所以下面可以找到 irq_domain */
 	rc = of_irq_parse_one(dev, index, &oirq);
 	if (rc)
 		return rc;

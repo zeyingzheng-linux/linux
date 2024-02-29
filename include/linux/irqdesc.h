@@ -69,6 +69,11 @@ struct irq_desc {
 	atomic_t		threads_handled;
 	int			threads_handled_last;
 	raw_spinlock_t		lock;
+	/* 一个中断描述符可能会有两种情况，一种是该IRQ是global，一旦disable了该irq，
+	 * 那么对于所有的CPU而言都是disable的。还有一种情况，就是该IRQ是per CPU的，
+	 * 也就是说，在某个CPU上disable了该irq只是disable了本CPU的IRQ而已，其他的
+	 * CPU仍然是enable的。percpu_enabled是一个描述该IRQ在各个CPU上是否enable成员
+	 * */
 	struct cpumask		*percpu_enabled;
 	const struct cpumask	*percpu_affinity;
 #ifdef CONFIG_SMP

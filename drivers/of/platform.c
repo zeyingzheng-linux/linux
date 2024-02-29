@@ -118,6 +118,7 @@ struct platform_device *of_device_alloc(struct device_node *np,
 	/* count the io and irq resources */
 	while (of_address_to_resource(np, num_reg, &temp_res) == 0)
 		num_reg++;
+	/* 获得irq个数 */
 	num_irq = of_irq_count(np);
 
 	/* Populate the resource table */
@@ -131,9 +132,11 @@ struct platform_device *of_device_alloc(struct device_node *np,
 		dev->num_resources = num_reg + num_irq;
 		dev->resource = res;
 		for (i = 0; i < num_reg; i++, res++) {
+			/* 解析reg */
 			rc = of_address_to_resource(np, i, res);
 			WARN_ON(rc);
 		}
+		/* 解析irq */
 		if (of_irq_to_resource_table(np, res, num_irq) != num_irq)
 			pr_debug("not all legacy IRQ resources mapped for %pOFn\n",
 				 np);
