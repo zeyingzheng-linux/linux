@@ -63,6 +63,11 @@ static inline void __init __late_clear_fixmap(enum fixed_addresses idx)
 }
 #endif
 
+/* 最多支持FIX_BTMAPS_SLOTS个映射，每个映射最大支持映射256KB
+ * slot_virt数组存储每个slot的虚拟地址首地址。prev_map数组用
+ * 来记录已经分配出去的虚拟地址，数组值为0代表没有分配。
+ * prev_size记录映射的size
+ * */
 static void __iomem *prev_map[FIX_BTMAPS_SLOTS] __initdata;
 static unsigned long prev_size[FIX_BTMAPS_SLOTS] __initdata;
 static unsigned long slot_virt[FIX_BTMAPS_SLOTS] __initdata;

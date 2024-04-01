@@ -367,6 +367,7 @@ static enum hrtimer_restart watchdog_timer_fn(struct hrtimer *hrtimer)
 	/* kick the softlockup detector */
 	if (completion_done(this_cpu_ptr(&softlockup_completion))) {
 		reinit_completion(this_cpu_ptr(&softlockup_completion));
+		/* 理解为queue一个stop调度类（看实现就是FIFO）的进程过去 */
 		stop_one_cpu_nowait(smp_processor_id(),
 				softlockup_fn, NULL,
 				this_cpu_ptr(&softlockup_stop_work));

@@ -412,6 +412,7 @@ static int __init rmem_cma_setup(struct reserved_mem *rmem)
 		return -EBUSY;
 	}
 
+	/* CMA内存必须要建立地址映射，否则无法进入伙伴系统。因此如果有no-map属性，就会返回错误 */
 	if (!of_get_flat_dt_prop(node, "reusable", NULL) ||
 	    of_get_flat_dt_prop(node, "no-map", NULL))
 		return -EINVAL;

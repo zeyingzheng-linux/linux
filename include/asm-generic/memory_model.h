@@ -30,6 +30,20 @@
  * Note: section's mem_map is encoded to reflect its start_pfn.
  * section[i].section_mem_map == mem_map's address - start_pfn;
  */
+/* For example, 48bit and 4K granule
+ *                        L0         L1          L2        L3	     PAGE_SHIFT
+ *                    |         ||         ||         |          |
+ *1111 1111 1111 1111 0111 1101 1111 1111 1111 1110 0111 1111 1001 0000 0000 0000
+ *                    |                    ||                    |
+ *                    |         18bit      ||       18bit        |     12bit
+ *                    |	   section index   ||			 |
+ *                    |                    PFN                   |
+ *                    |                    ||            SECTION_SIZE_BITS
+ */
+/* 经典这种struct page是分配在线性映射区的，而CONFIG_SPARSEMEM_VMEMMAP
+ * 则是将struct page分配在 vmemmap 区域里面了。看 page_to_virt 实现就
+ * 知道了。
+ * */
 #define __page_to_pfn(pg)					\
 ({	const struct page *__pg = (pg);				\
 	int __sec = page_to_section(__pg);			\

@@ -1312,6 +1312,9 @@ void __init early_fixmap_init(void)
 	 * The boot-ioremap range spans multiple pmds, for which
 	 * we are not prepared:
 	 */
+	/* 即动态映射的那部分最好不要超过2M，起始留给它的都没有2M了，应该
+	 * 是2M - 28K，early_ioremap直接填 PTE表项就够了，early_ioremap_init
+	 * dtb的映射可以看fixmap_remap_fdt*/
 	BUILD_BUG_ON((__fix_to_virt(FIX_BTMAP_BEGIN) >> PMD_SHIFT)
 		     != (__fix_to_virt(FIX_BTMAP_END) >> PMD_SHIFT));
 
@@ -1385,6 +1388,9 @@ void *__init fixmap_remap_fdt(phys_addr_t dt_phys, int *size, pgprot_t prot)
 	BUILD_BUG_ON(__fix_to_virt(FIX_FDT_END) >> SWAPPER_TABLE_SHIFT !=
 		     __fix_to_virt(FIX_BTMAP_BEGIN) >> SWAPPER_TABLE_SHIFT);
 
+	/* 我们虚拟地址2M对齐，但却不会限制物理地址，让dtb随便放，所以才
+	 * 准备了4M的虚拟地址空间给到dtb，但实际上dtb最大限制是MAX_FDT_SIZE
+	 * 即是2M大小，物理上应该是8字节对齐的，MIN_FDT_ALIGN */
 	offset = dt_phys % SWAPPER_BLOCK_SIZE;
 	dt_virt = (void *)dt_virt_base + offset;
 

@@ -1301,6 +1301,10 @@ static inline struct zoneref *first_zones_zonelist(struct zonelist *zonelist,
  * PFN_SECTION_SHIFT		pfn to/from section number
  */
 #define PA_SECTION_SHIFT	(SECTION_SIZE_BITS)
+/* SECTION_SIZE_BITS在低位，所以用PFN看自己在哪一个section，
+ * 应该去掉PAGE_SHIFT，理解SECTION_SIZE_BITS以外的高位就是
+ * 表征一共可以支持多少个section，SECTION_SIZE_BITS就是表征
+ * 一个section有多大，例如30bit表示1GB大小  */
 #define PFN_SECTION_SHIFT	(SECTION_SIZE_BITS - PAGE_SHIFT)
 
 #define NR_MEM_SECTIONS		(1UL << SECTIONS_SHIFT)
@@ -1386,6 +1390,8 @@ struct mem_section {
 };
 
 #ifdef CONFIG_SPARSEMEM_EXTREME
+/* 基本上用二级数组来存section，假定了一级section指针一定是指向一个page
+ * 所以用这个算法来算出，一个ROOT到底能放多少个section */
 #define SECTIONS_PER_ROOT       (PAGE_SIZE / sizeof (struct mem_section))
 #else
 #define SECTIONS_PER_ROOT	1

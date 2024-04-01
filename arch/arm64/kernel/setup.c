@@ -184,6 +184,7 @@ static void __init setup_machine_fdt(phys_addr_t dt_phys)
 	void *dt_virt = fixmap_remap_fdt(dt_phys, &size, PAGE_KERNEL);
 	const char *name;
 
+	/* 保留DTB的那段空间，认为已经被分配掉了 */
 	if (dt_virt)
 		memblock_reserve(dt_phys, size);
 

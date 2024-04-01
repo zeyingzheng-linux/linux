@@ -175,6 +175,7 @@ static const struct of_device_id __rmem_of_table_sentinel
 /*
  * __reserved_mem_init_node() - call region specific reserved memory init code
  */
+/* RESERVEDMEM_OF_DECLARE */
 static int __init __reserved_mem_init_node(struct reserved_mem *rmem)
 {
 	extern const struct of_device_id __reservedmem_of_table[];
@@ -263,6 +264,9 @@ void __init fdt_init_reserved_mem(void)
 	int i;
 
 	/* check for overlapping reserved regions */
+	/* 检查静态定义的 reserved memory region之间是否有重叠区域，如果有重叠，
+	 * 这里并不会对reserved memory region的base和size进行调整，
+	 * 只是打印出错信息而已 */
 	__rmem_check_for_overlap();
 
 	for (i = 0; i < reserved_mem_count; i++) {

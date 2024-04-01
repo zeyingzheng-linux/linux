@@ -879,6 +879,30 @@ SYM_FUNC_START_LOCAL(__no_granule_support)
 	b	1b
 SYM_FUNC_END(__no_granule_support)
 
+/* r_offset：需要重定位的位址，例如kimage_vaddr存在_text，r_offset
+ *           此时就是kimage_vaddr，注意這個位址是編譯時決定的位址
+ * r_info：符號表索引以及重定位種類
+ * r_addend：一個重定位過程需要加上的值，意義由重定位種類決定
+ *	     例如我们这个case存的就是符号原来的链接地址，例如
+ *	     _text的链接地址，所以以后访问_text就是正确的了
+ *	     像kimage_vaddr，就是直接重定位了该内存里面
+ *	     的数值了，当然应该也是这段代码干的活
+ * 假设我们有这么一条汇编指令，LDR x0, =kimage_vaddr
+ * 假设编译出来之后的代码这样，LDR x0, #a0 (a0是和pc之间的offset)
+ * 那么我们假设，_text 编译地址是 0x500，上面这条指令在 0x1000，这样内核
+ * 会产生一个重定位的entry在 0x10a0，里面就应该存在 _text的编译期间地址
+ *
+ * 那么接下来假设该指令的运行时地址是 0x3000，那么 _text就是 0x2500
+ * 我们就需要将 0x2500 写入 0x10a0 + 0x2000(x23)
+ *
+ * 0x500:    _text		---->   0x2500:   _text
+ *
+ * 0x1000:   ldr x0,#a0		---->	0x3000:   ldr x0,#a0
+ *
+ * 0x10a0:   _text(0x500)	---->	0x30a0:   _text(0x2500)
+ *
+ * r_offset = 0x10a0(entry)，r_addend = 0x500(_text)
+ */
 #ifdef CONFIG_RELOCATABLE
 SYM_FUNC_START_LOCAL(__relocate_kernel)
 	/*
@@ -895,12 +919,12 @@ SYM_FUNC_START_LOCAL(__relocate_kernel)
 
 0:	cmp	x9, x10
 	b.hs	1f
-	ldp	x12, x13, [x9], #24
-	ldr	x14, [x9, #-8]
+	ldp	x12, x13, [x9], #24		//x12 = r_offset, x13 = r_info
+	ldr	x14, [x9, #-8]			//x14 = r_addend
 	cmp	w13, #R_AARCH64_RELATIVE
 	b.ne	0b
 	add	x14, x14, x23			// relocate
-	str	x14, [x12, x23]
+	str	x14, [x12, x23]			//r_offset 也是编译时地址，所以+x23
 	b	0b
 
 1:

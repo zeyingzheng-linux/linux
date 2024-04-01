@@ -1038,6 +1038,9 @@ static void check_panic_on_oom(struct oom_control *oc)
 		 * does not panic for cpuset, mempolicy, or memcg allocation
 		 * failures.
 		 */
+		/* 在有cpuset、memory policy、memcg的约束情况下的OOM，可以考虑
+		 * 不panic，而是启动OOM killer
+		 * */
 		if (oc->constraint != CONSTRAINT_NONE)
 			return;
 	}
@@ -1116,10 +1119,18 @@ bool out_of_memory(struct oom_control *oc)
 		oc->nodemask = NULL;
 	check_panic_on_oom(oc);
 
+	/* sysctl_oom_kill_allocating_task 可以控制到底是杀触发OOM的进程还是
+	 * 杀最坏的那个，也就是占用内存最多的那个进程
+	 * */
 	if (!is_memcg_oom(oc) && sysctl_oom_kill_allocating_task &&
 	    current->mm && !oom_unkillable_task(current) &&
 	    oom_cpuset_eligible(current, oc) &&
 	    current->signal->oom_score_adj != OOM_SCORE_ADJ_MIN) {
+		/* 要考虑是否用户空间进程（不能杀内核线程）、是否unkillable
+		 * task（例如init进程就不能杀），用户空间是否通过设定参数
+		 * （oom_score_adj）阻止kill该task。如果万事俱备，那么就
+		 * 调用oom_kill_process干掉当前进程
+		 * */
 		get_task_struct(current);
 		oc->chosen = current;
 		oom_kill_process(oc, "Out of memory (oom_kill_allocating_task)");

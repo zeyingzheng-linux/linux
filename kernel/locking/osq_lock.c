@@ -33,7 +33,12 @@ static inline struct optimistic_spin_node *decode_cpu(int encoded_cpu_val)
 
 	return per_cpu_ptr(&osq_node, cpu_nr);
 }
-
+/* 				CPU0		CPU1		CPU2
+ *  				cpu=1      curr=2,tail=2
+ *node位于链表尾部	      prev_node	      curr_node
+ *					       curr=2	        tail=3
+ *有新进程申请，不在尾部      prev_node	      curr_node	       new_node
+ * */
 /*
  * Get a stable @node->next pointer, either for unlock() or unqueue() purposes.
  * Can return NULL in case we were the last queued and we updated @lock instead.
@@ -55,6 +60,9 @@ osq_wait_next(struct optimistic_spin_queue *lock,
 	old = prev ? prev->cpu : OSQ_UNLOCKED_VAL;
 
 	for (;;) {
+		/* 判断当前节点是否为MCS链表中的最后一个节点，如果是，即没有后继节点了，
+		 * 将tail设置成prev节点的值，然后直接跳出返回NULL（需要返回next嘛）
+		 * */
 		if (atomic_read(&lock->tail) == curr &&
 		    atomic_cmpxchg_acquire(&lock->tail, curr, old) == curr) {
 			/*
@@ -75,6 +83,7 @@ osq_wait_next(struct optimistic_spin_queue *lock,
 		 * wait for either @lock to point to us, through its Step-B, or
 		 * wait for a new @node->next from its Step-C.
 		 */
+		/* 如果有后继节点，那么将当前node的next置NULL，然后返回next给用户 */
 		if (node->next) {
 			next = xchg(&node->next, NULL);
 			if (next)
@@ -91,6 +100,7 @@ bool osq_lock(struct optimistic_spin_queue *lock)
 {
 	struct optimistic_spin_node *node = this_cpu_ptr(&osq_node);
 	struct optimistic_spin_node *prev, *next;
+	/* 编码方式与CPU编码方式不太一样，0表示没有CPU，1表示CPU0 */
 	int curr = encode_cpu(smp_processor_id());
 	int old;
 
@@ -105,6 +115,7 @@ bool osq_lock(struct optimistic_spin_queue *lock)
 	 * the lock tail.
 	 */
 	old = atomic_xchg(&lock->tail, curr);
+	/* 原子交换后返回旧值，旧值如果为0，说明还没有CPU持有锁，我直接就持有 */
 	if (old == OSQ_UNLOCKED_VAL)
 		return true;
 
@@ -158,6 +169,10 @@ bool osq_lock(struct optimistic_spin_queue *lock)
 		 * cpu_relax() below implies a compiler barrier which would
 		 * prevent this comparison being optimized away.
 		 */
+		/* 1. 如果prev->next == node，说明期间链表没被修改，接着用原子指令修改
+		 * 2. 原子判断prev->next是否等于next，如果相等就把prev->next置为NULL
+		 * 如此便达到目的了，判断返回的旧值是node就可以直接跳走，如果旧值不是
+		 * node，则证明这期间链表被修改过了 */
 		if (data_race(prev->next) == node &&
 		    cmpxchg(&prev->next, node, NULL) == node)
 			break;
@@ -167,6 +182,10 @@ bool osq_lock(struct optimistic_spin_queue *lock)
 		 * in which case we should observe @node->locked becoming
 		 * true.
 		 */
+		/* 既然链表被修改了，也许锁传递过来了，所以重新判断当前节点是否持有锁了
+		 * 如果持有锁了，返回true，为什么持有锁，因为前驱节点传递过来的。如果
+		 * 没有持有锁，重新去 load node->prev，接着for循环
+		 * */
 		if (smp_load_acquire(&node->locked))
 			return true;
 
@@ -212,6 +231,9 @@ void osq_unlock(struct optimistic_spin_queue *lock)
 	/*
 	 * Fast path for the uncontended case.
 	 */
+	/* 如果tail保存的CPU编号是当前进程的CPU编号，说明没有CPU来竞争锁，那么直接
+	 * 将tail置为0，释放锁，这是最理想的状态
+	 * */
 	if (likely(atomic_cmpxchg_release(&lock->tail, curr,
 					  OSQ_UNLOCKED_VAL) == curr))
 		return;
@@ -221,11 +243,15 @@ void osq_unlock(struct optimistic_spin_queue *lock)
 	 */
 	node = this_cpu_ptr(&osq_node);
 	next = xchg(&node->next, NULL);
+	/* 如果有后继节点，那么把锁传递过去 */
 	if (next) {
 		WRITE_ONCE(next->locked, 1);
 		return;
 	}
 
+	/* 如果后继节点为空，说明在执行 osq_unlock的过程中有成员擅自离队，那么只能调用
+	 * osq_wait_next来确定或者等待确定的后继节点，当然也有可能后继无人
+	 * */
 	next = osq_wait_next(lock, node, NULL);
 	if (next)
 		WRITE_ONCE(next->locked, 1);

@@ -66,6 +66,8 @@ EXPORT_SYMBOL(__mutex_init);
 #define MUTEX_FLAG_HANDOFF	0x02
 #define MUTEX_FLAG_PICKUP	0x04
 
+/* 可以清楚的知道这三个flag主要都是为了在等待队列上的成员服务的，乐观自旋的
+ * 那些个完全不关心这三个成员，所以会看到wait_list为空的时候就直接清除了 */
 #define MUTEX_FLAGS		0x07
 
 /*
@@ -162,6 +164,7 @@ static __always_inline bool __mutex_trylock_fast(struct mutex *lock)
 	unsigned long curr = (unsigned long)current;
 	unsigned long zero = 0UL;
 
+	/* 旧值和expected如果相等，会返回1 */
 	if (atomic_long_try_cmpxchg_acquire(&lock->owner, &zero, curr))
 		return true;
 
@@ -289,6 +292,9 @@ EXPORT_SYMBOL(mutex_lock);
 /*
  * Trylock variant that returns the owning task on failure.
  */
+/* 无法获取到锁的时候，会返回锁持有者的task_struct
+ * 如果获取到锁的时候，会返回NULL
+ * */
 static inline struct task_struct *__mutex_trylock_or_owner(struct mutex *lock)
 {
 	return __mutex_trylock_common(lock, false);
@@ -349,6 +355,7 @@ bool mutex_spin_on_owner(struct mutex *lock, struct task_struct *owner,
 	bool ret = true;
 
 	rcu_read_lock();
+	/* 当__mutex_owner(lock) != owner时，意味着持有者已经释放锁了，这时候返回true */
 	while (__mutex_owner(lock) == owner) {
 		/*
 		 * Ensure we emit the owner->on_cpu, dereference _after_
@@ -361,6 +368,10 @@ bool mutex_spin_on_owner(struct mutex *lock, struct task_struct *owner,
 		/*
 		 * Use vcpu_is_preempted to detect lock holder preemption issue.
 		 */
+		/* 1. 锁持有者没有释放锁，但是在临界区被调度出去了
+		 * 2. 当前进程需要被调度出去时，即有更高优先级的进来了
+		 * 以上两个条件任何一个成立，我们都应该取消乐观自旋等待机制，这时候回false
+		 * */
 		if (!owner->on_cpu || need_resched() ||
 				vcpu_is_preempted(task_cpu(owner))) {
 			ret = false;
@@ -450,6 +461,10 @@ mutex_optimistic_spin(struct mutex *lock, struct ww_acquire_ctx *ww_ctx,
 		 * acquire the mutex all at once, the spinners need to take a
 		 * MCS (queued) lock first before spinning on the owner field.
 		 */
+		/* 这个是为了保证只有一个等待者在自旋等待锁持有者释放锁
+		 * 其余人，应该是在这上面自旋（本地CPU上），防止cache颠簸
+		 * 因为自旋锁已经实现了MCS，所以此处用spin_lock代替也行
+		 * */
 		if (!osq_lock(&lock->osq))
 			goto fail;
 	}
@@ -458,6 +473,10 @@ mutex_optimistic_spin(struct mutex *lock, struct ww_acquire_ctx *ww_ctx,
 		struct task_struct *owner;
 
 		/* Try to acquire the mutex... */
+		/* 乐观自旋主要考虑两种情况：
+		 * 1. 锁持有者正在临界区执行，因为curr和owner指向的task是不同的
+		 * 2. 当持有者离开临界区并释放锁时，就可以通过CMPXCHG尝试获取锁
+		 * */
 		owner = __mutex_trylock_or_owner(lock);
 		if (!owner)
 			break;
@@ -466,6 +485,9 @@ mutex_optimistic_spin(struct mutex *lock, struct ww_acquire_ctx *ww_ctx,
 		 * There's an owner, wait for it to either
 		 * release the lock or go to sleep.
 		 */
+		/* 这个函数主要负责乐观自旋，看到锁持有者睡眠，或者当前进程需要
+		 * 被调度返回false，看到锁持有者已经释放了返回true，如果返回true
+		 * 那么当前进程就可以去占锁了 */
 		if (!mutex_spin_on_owner(lock, owner, ww_ctx, waiter))
 			goto fail_unlock;
 
@@ -676,6 +698,8 @@ __mutex_lock_common(struct mutex *lock, unsigned int state, unsigned int subclas
 		 * state back to RUNNING and fall through the next schedule(),
 		 * or we must see its unlock and acquire.
 		 */
+		/* __mutex_trylock_or_handoff尝试获取锁，如果是等待队列的第一个成员，
+		 * 也去设置 handoff标记，让下次释放锁提交给当前执行流 */
 		if (__mutex_trylock_or_handoff(lock, first) ||
 		    (first && mutex_optimistic_spin(lock, ww_ctx, &waiter)))
 			break;
@@ -865,16 +889,21 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
 		if (owner & MUTEX_FLAG_HANDOFF)
 			break;
 
+		/* 返回1，说明我已经把task域清掉了，毕竟我这边就是在释放锁的操作，只是flag还在
+		 * 需要记住的是flag主要都是针对在wait_list的人来说的，跟乐观自旋的人没太大关系
+		 * */
 		if (atomic_long_try_cmpxchg_release(&lock->owner, &owner, __owner_flags(owner))) {
 			if (owner & MUTEX_FLAG_WAITERS)
 				break;
 
+			/* 理想情况，若锁的等待队列里面没有等待者，那么直接解锁即可 */
 			return;
 		}
 	}
 
 	raw_spin_lock(&lock->wait_lock);
 	debug_mutex_unlock(lock);
+	/* 若有等待者需要唤醒第一个起来 */
 	if (!list_empty(&lock->wait_list)) {
 		/* get the first entry from the wait-list: */
 		struct mutex_waiter *waiter =
@@ -887,6 +916,8 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
 		wake_q_add(&wake_q, next);
 	}
 
+	/* 若锁持有者被等待队列的第一个进程设置了MUTEX_FLAG_HANDOFF标志，那么锁持有者不会先
+	 * 释放锁再给第一个进程加锁，而是通过cpmxchg把锁传递给第一个进程 */
 	if (owner & MUTEX_FLAG_HANDOFF)
 		__mutex_handoff(lock, next);
 

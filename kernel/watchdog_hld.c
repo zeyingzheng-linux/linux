@@ -163,6 +163,9 @@ static void watchdog_overflow_callback(struct perf_event *event,
 	return;
 }
 
+/* softlockup: 抢占被禁止太久，检测需要一个时钟中断，即时钟中断去看某段程序的更新
+ * hardlockup: 中断被禁止太久，检测需要一个硬件事件，即不可屏蔽的中断去看时钟中断的更新
+ * */
 static int hardlockup_detector_event_create(void)
 {
 	unsigned int cpu = smp_processor_id();

@@ -408,6 +408,9 @@ void __init bootmem_init(void)
 	/*
 	 * Reserve the CMA area after arm64_dma_phys_limit was initialised.
 	 */
+	/* 这个通过命令行或者内核配置文件来定义Global CMA area，如果没有定义或者
+	 * 设备树已经定义了Global CMA area，这个函数基本不起作用，因为设备树优
+	 * 先级大于它，设备树既可以定义Global也可以定义设备私有的CMA area */
 	dma_contiguous_reserve(arm64_dma_phys_limit);
 
 	/*

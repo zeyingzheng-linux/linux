@@ -597,8 +597,20 @@ static int __init __fdt_scan_reserved_mem(unsigned long node, const char *uname,
 	if (!of_fdt_device_is_available(initial_boot_params, node))
 		return 0;
 
+	/* 逐一对每一个定义的memory region进行预留。实际的预留内存动作
+	 * 可以调用memblock_reserve或者memblock_remove，具体调用哪一个
+	 * 是和该节点是否定义no-map属性相关，如果定义了no-map属性，那么
+	 * 说明这段内存操作系统根本不需要进行地址映射，也就是说这块内存
+	 * 是不归操作系统内存管理模块来管理的，而是归于具体的驱动使用
+	 * */
 	err = __reserved_mem_reserve_reg(node, uname);
 	if (err == -ENOENT && of_get_flat_dt_prop(node, "size", NULL))
+		/* 另外一种定义reserved memory的方法是动态定义，也就是
+		 * 说定义了该内存区域的size（也可以定义alignment或者
+		 * alloc-range进一步约定动态分配的reserved memory属性
+		 * 不过这些属性都是option的），但是不指定具体的基地址，
+		 * 让操作系统自己来分配这段memory
+		 * */
 		fdt_reserved_mem_save_node(node, uname, 0, 0);
 
 	/* scan next node */
@@ -641,6 +653,7 @@ void __init early_init_fdt_scan_reserved_mem(void)
 	int n;
 	u64 base, size;
 
+	/* initial_boot_params实际上就是fdt对应的虚拟地址 */
 	if (!initial_boot_params)
 		return;
 
@@ -656,6 +669,14 @@ void __init early_init_fdt_scan_reserved_mem(void)
         /* 处理节点/reserved-memory 的保留内存，   1. 如果有nomap属性，直接从memblock.memory中删除，就是内核访问不到了 2. 如果没有nommp属性，添加到memblock.reserve中，认为已经被分配 */
 	of_scan_flat_dt(__fdt_scan_reserved_mem, NULL);
         /* 调用reserved内存对应的处理函数 */
+	/* device tree中的reserved-memory节点及其子节点静态或者动态定义
+	 * 了若干的reserved memory region，静态定义的memory region起始
+	 * 地址和size都是确定的，因此可以立刻调用memblock的模块进行内存
+	 * 区域的预留，但是对于动态定义的memory region
+	 * __fdt_scan_reserved_mem只是将信息保存在了reserved_mem全局变
+	 * 量中，并没有进行实际的内存预留动作，具体的操作在
+	 * fdt_init_reserved_mem函数中
+	 * */
 	fdt_init_reserved_mem();
 	fdt_reserve_elfcorehdr();
 }
@@ -1155,6 +1176,7 @@ int __init early_init_dt_scan_chosen(unsigned long node, const char *uname,
 
 	pr_debug("search \"chosen\", depth: %d, uname: %s\n", depth, uname);
 
+	/* chosen 是root node的子节点，因此 depth必须是1 */
 	if (depth != 1 || !data ||
 	    (strcmp(uname, "chosen") != 0 && strcmp(uname, "chosen@0") != 0))
 		return 0;
@@ -1178,6 +1200,12 @@ int __init early_init_dt_scan_chosen(unsigned long node, const char *uname,
 #if defined(CONFIG_CMDLINE_EXTEND)
 	strlcat(data, " ", COMMAND_LINE_SIZE);
 	strlcat(data, CONFIG_CMDLINE, COMMAND_LINE_SIZE);
+	/* 一般而言，内核有可能会定义一个default command line string
+	 * （CONFIG_CMDLINE），如果bootloader没有通过device tree传递命
+	 * 令行参数过来，那么可以考虑使用default参数。如果系统定义了
+	 * CONFIG_CMDLINE_FORCE，那么系统强制使用缺省命令行参数，bootloader
+	 * 传递过来的是无效的
+	 * */
 #elif defined(CONFIG_CMDLINE_FORCE)
 	strlcpy(data, CONFIG_CMDLINE, COMMAND_LINE_SIZE);
 #else
