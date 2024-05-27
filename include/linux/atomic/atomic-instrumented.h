@@ -1661,6 +1661,8 @@ atomic_long_try_cmpxchg(atomic_long_t *v, long *old, long new)
 	return arch_atomic_long_try_cmpxchg(v, old, new);
 }
 
+/* 比较*v 和 *old，如果相同，则将new设置进去*v，返回1，否则返回0
+ * 且，*old会拿到*v的值，所以叫old，也可以认为是expect */
 static __always_inline bool
 atomic_long_try_cmpxchg_acquire(atomic_long_t *v, long *old, long new)
 {

@@ -170,7 +170,7 @@ bool osq_lock(struct optimistic_spin_queue *lock)
 		 * prevent this comparison being optimized away.
 		 */
 		/* 1. 如果prev->next == node，说明期间链表没被修改，接着用原子指令修改
-		 * 2. 原子判断prev->next是否等于next，如果相等就把prev->next置为NULL
+		 * 2. 原子判断prev->next是否等于node，如果相等就把prev->next置为NULL
 		 * 如此便达到目的了，判断返回的旧值是node就可以直接跳走，如果旧值不是
 		 * node，则证明这期间链表被修改过了 */
 		if (data_race(prev->next) == node &&

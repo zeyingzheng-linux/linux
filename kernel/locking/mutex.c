@@ -122,8 +122,11 @@ static inline struct task_struct *__mutex_trylock_common(struct mutex *lock, boo
 			task = curr;
 		}
 
+		/* owner will got old value.if owner == lock->owner, then set new value
+		 * and return true if success, otherwise return false */
 		if (atomic_long_try_cmpxchg_acquire(&lock->owner, &owner, task | flags)) {
 			if (task == curr)
+				/* I got the lock */
 				return NULL;
 			break;
 		}
