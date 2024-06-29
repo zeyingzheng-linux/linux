@@ -646,7 +646,7 @@ void handle_level_irq(struct irq_desc *desc)
 	/* 对于电平触发的high level handler，我们一开始就mask并ack了中断，
 	 * 因此后续specific handler因该是串行化执行的，为何要判断in
 	 * progress标记呢？不要忘记spurious interrupt，那里会直接调用
-	 * handler来处理spurious interrupt
+	 * handler来处理spurious interrupt: note_interrupt
 	 * */
 	if (!irq_may_run(desc))
 		goto out_unlock;
@@ -661,7 +661,7 @@ void handle_level_irq(struct irq_desc *desc)
 	 * 2. 该中断被其他的CPU disable了。如果该中断被其他的CPU disable了，
 	 * 本就不应该继续执行该中断的specific handler，我们也是设定pending状态，
 	 * mask and ack中断就退出了。当其他CPU的代码离开临界区，enable 该中断
-	 * 的时候，软件会检测pending状态并resend该中断
+	 * 的时候，软件会检测pending状态并resend该中断:check_irq_resend
 	 * */
 	if (unlikely(!desc->action || irqd_irq_disabled(&desc->irq_data))) {
 		desc->istate |= IRQS_PENDING;

@@ -44,10 +44,12 @@ enum migratetype {
 	MIGRATE_UNMOVABLE,
 	/* 当需要大的连续内存时，通过移动当前使用的页面来尽可能防止碎片，用于分配用户内存*/
 	MIGRATE_MOVABLE,
-	/* 当没有可用内存时使用此类型 */
+	/* 当没有可用内存时使用此类型，可回收类型，需要数据时候可以重新从数据源获取
+	 * 后备存贮设备支持的页属于这种，例如匿名页面，文件映射页面，pagecache等*/
 	MIGRATE_RECLAIMABLE,
 	MIGRATE_PCPTYPES,	/* the number of types on the pcp lists */
-	/* 减少原子分配请求无法进行高阶页面分配的可能，内核会提前准备一个页面块 */
+	/* 减少原子分配请求无法进行高阶页面分配的可能，内核会提前准备一个页面块
+	 * 高阶原子分配，即order>0，且分配时不能睡眠等待 */
 	MIGRATE_HIGHATOMIC = MIGRATE_PCPTYPES,
 #ifdef CONFIG_CMA
 	/*
@@ -63,11 +65,14 @@ enum migratetype {
 	 * MAX_ORDER_NR_PAGES should biggest page be bigger than
 	 * a single pageblock.
 	 */
-	/* 页面类型由CMA内存分配器单独管理 */
+	/* 页面类型由CMA内存分配器单独管理
+	 * 连续内存分配器*/
 	MIGRATE_CMA,
 #endif
 #ifdef CONFIG_MEMORY_ISOLATION
-	/* 内核会暂时更改为这种类型，以迁移使用中的系列活动页面 */
+	/* 内核会暂时更改为这种类型，以迁移使用中的系列活动页面
+	 * 不能从这里分配，用于隔离，由连续内存分配器、内存热拔插、从
+	 * 内存硬件错误恢复等功能使用 */
 	MIGRATE_ISOLATE,	/* can't allocate from here */
 #endif
 	MIGRATE_TYPES
@@ -795,7 +800,7 @@ enum {
 	 * The NUMA zonelists are doubled because we need zonelists that
 	 * restrict the allocations to a single node for __GFP_THISNODE.
 	 */
-	/* 只包含当前内存节点的备用区域列表，需要申请页时指定__GFP_THISNODE。指向远端节点的zone */
+	/* 只包含当前内存节点的备用区域列表，需要申请页时指定__GFP_THISNODE。*/
 	ZONELIST_NOFALLBACK,	/* zonelist without fallback (__GFP_THISNODE) */
 #endif
 	MAX_ZONELISTS

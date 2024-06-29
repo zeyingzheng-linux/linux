@@ -106,6 +106,12 @@ struct page {
 			struct address_space *mapping;
 			/* 放MIGRATE类型 */
 			/* 表示这个页面在一个vma映射中的序号或偏移量 */
+			/* 匿名页面：
+			 * 1. 私有映射：相对整个地址空间的offset
+			 * 2. 共享映射：相对vma的offset
+			 * pagecache:
+			 * 1. 在文件映射里面的offset
+			 * */
 			pgoff_t index;		/* Our offset within mapping. */
 			/**
 			 * @private: Mapping-private opaque data.
@@ -422,6 +428,7 @@ struct vm_area_struct {
 	 * See vmf_insert_mixed_prot() for discussion.
 	 */
 	/* VMA的访问权限，用于将VMA属性标志位转换成处理相关的页表项的属性
+	 * PROT_WRITE
 	 * vm_get_page_prot ，例如 PAGE_READONLY*/
 	pgprot_t vm_page_prot;
 	/* 描述该VMA的一组标志位，VMA属性标志位 */
@@ -458,8 +465,9 @@ struct vm_area_struct {
 	/* Information about our backing store: */
 	/* 指向文件映射的偏移量，这个变量的单位不是字节，而是页面的大小(page size)
 	 * 对于匿名页面来说，它的值可以是0或者 vm_addr / PAGE_SIZE，例如mmap中采用 MAP_SHARED
-	 * 映射时为0，采用 MAP_PRIVATE 映射时为 vm_addr / PAGE_SIZE。vm_pgoff值在匿名页面的
-	 * 生命周期中只有RMAP才用到*/
+	 * 映射时为0，采用 MAP_PRIVATE 映射时为 vm_addr / PAGE_SIZE。vm_addr / PAGE_SIZE表示
+	 * 匿名页面在整个进程地址空间中的偏移量，vm_pgoff值在匿名页面的生命周期中只有RMAP才用
+	 * 到，相关的函数可以看，linear_page_index 和 page->index*/
 	unsigned long vm_pgoff;		/* Offset (within vm_file) in PAGE_SIZE
 					   units */
 	/* 指向file的实例，描述一个被映射的文件 */

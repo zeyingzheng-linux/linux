@@ -441,5 +441,6 @@ static int __init rmem_cma_setup(struct reserved_mem *rmem)
 
 	return 0;
 }
+/* cma_init_reserved_areas 释放给buddy */
 RESERVEDMEM_OF_DECLARE(cma, "shared-dma-pool", rmem_cma_setup);
 #endif

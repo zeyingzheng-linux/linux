@@ -332,6 +332,19 @@ void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 *
 	 * 0,1,0 -> 0,0,1
 	 */
+	/* 如果当前spinlock的值只有pending比特被设定，那么说明该spinlock正处于owner把锁转交给
+	 * pending owner的过程中（即owner释放了锁，但是pending owner还没有拾取该锁）。在这种
+	 * 情况下，我们需要重读spinlock的值。当然，如果持续重读的结果仍然是仅pending比特被设
+	 * 定，那么在_Q_PENDING_LOOPS次循环读之后放弃。
+	 *
+	 * 为何这里我们要这么执着的等待pending owner线程将其状态从pending迁移到locked状态呢
+	 * ？因为我们不想排队。如果带着pending bit往下走，在B处就会直接接入排队过程。一旦进
+	 * 入排队过程，我们会触碰第二条cacheline（mcs lock），如果pending owner获取了锁，它
+	 * 会clear pending比特，这样我们就成为第一个等锁线程，也就不需要排队，变成pending
+	 * owner线程。理论上owner释放锁和pending owner获取锁应该很快，但是当竞争比较激烈的
+	 * 时候，难免会出现长时间单pending bit被设定的情况，因此这里也不适合死等，我们设置
+	 * _Q_PENDING_LOOPS等于1，即重读一次就OK了
+	 * */
 	if (val == _Q_PENDING_VAL) {
 		int cnt = _Q_PENDING_LOOPS;
 		val = atomic_cond_read_relaxed(&lock->val,
@@ -341,6 +354,10 @@ void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	/*
 	 * If we observe any contention; queue.
 	 */
+	/* 如果有其他的线程已经自旋等待该spinlock（pending域被设置为1）或者挂入MCS队列
+	 * （设置了tail域），那么当前线程需要挂入MCS等待队列。否则说明该线程是第一个等
+	 * 待持锁的，那么不需要排队，只要pending在自旋锁上就OK了
+	 * */
 	if (val & ~_Q_LOCKED_MASK)
 		goto queue;
 
@@ -349,6 +366,10 @@ void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 *
 	 * 0,0,* -> 0,1,* -> 0,0,1 pending, trylock
 	 */
+	/* 执行至此tail+pending都是0，看起来我们应该是第一个pending线程，通过
+	 * queued_fetch_set_pending_acquire函数读取了spinlock的旧值，同时设置pending
+	 * 比特标记状态
+	 * */
 	val = queued_fetch_set_pending_acquire(lock);
 
 	/*
@@ -358,6 +379,13 @@ void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 * n,0,0 -> 0,0,0 transition fail and it will now be waiting
 	 * on @next to become !NULL.
 	 */
+	/* 在设置pending标记位之后，我们需要再次检查一下我们这里设置pending比特的时
+	 * 候，其他的竞争者是否也修改了pending或者tail域。如果其他线程已经抢先修改，
+	 * 那么本线程不能再pending在自旋锁上了，而是需要回退pending设置（如果需要的
+	 * 话），并且挂入自旋等待队列。如果没有其他线程插入，那么当前线程可以开始自
+	 * 旋在spinlock上，等待owner释放锁了（我们称这种状态的线程被称为pending owner）
+	 * zzy:存在修改了tail，但是pending却没被修改的case吗？
+	 * */
 	if (unlikely(val & ~_Q_LOCKED_MASK)) {
 
 		/* Undo PENDING if we set it. */
@@ -378,6 +406,12 @@ void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 * clear_pending_set_locked() implementations imply full
 	 * barriers.
 	 */
+	/* 至此，我们已经成为合法的pending owner，距离获取spinlock仅一步之遥，属于是一人之下
+	 * ，万人之上（对比pending在mcs lock的线程而言）。pending owner通过
+	 * atomic_cond_read_acquire函数自旋在spinlock的locked域，直到owner释放spinlock。这里
+	 * 自旋并不是轮询，而是通过WFE指令让CPU停下来，降低功耗。当owner释放spinlock的时候会
+	 * 发送事件唤醒该CPU
+	 * */
 	if (val & _Q_LOCKED_MASK)
 		atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_MASK));
 
@@ -386,6 +420,10 @@ void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 	 *
 	 * 0,1,0 -> 0,0,1
 	 */
+	/* 发现owner已经释放了锁，那么pending owner解除自旋状态继续前行。清除pending标记，
+	 * 同时设定locked标记，持锁成功，进入临界区。以上的代码就是pending owner自旋等待
+	 * 进入临界区的代码
+	 * */
 	clear_pending_set_locked(lock);
 	lockevent_inc(lock_pending);
 	return;
@@ -397,8 +435,18 @@ void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 queue:
 	lockevent_inc(lock_slowpath);
 pv_queue:
+	/* 当不能pending在spinlock的时候，当前执行线索需要挂入MCS队列。如果不是队首，那么线程
+	 * 会自旋在自己的mcs lock上，如果在队首的位置，那么线程需要自旋在spinlock的上。和
+	 * pending owner不同的是，队首的线程是针对pending+locked两个域进行自旋
+	 * */
+	/* 获取mcs node的基地址 */
 	node = this_cpu_ptr(&qnodes[0].mcs);
+	/* 由于spin_lock可能会嵌套（在不同的自旋锁上嵌套，如果同一个那么就是死锁了）因此我们构
+	 * 建了多个mcs node，每次递进一层。顺便一提的是：当index大于阀值的时候，我们会取消
+	 * qspinlock机制，恢复原始自旋机制
+	 * */
 	idx = node->count++;
+	/* 将context index和cpu id组合成tail */
 	tail = encode_tail(smp_processor_id(), idx);
 
 	/*
@@ -417,6 +465,7 @@ pv_queue:
 		goto release;
 	}
 
+	/* 根据mcs node基地址和index找到对应的mcs node */
 	node = grab_mcs_node(node, idx);
 
 	/*
@@ -431,6 +480,9 @@ pv_queue:
 	 */
 	barrier();
 
+	/* 初始化MCS lock为未持锁状态（指mcs锁，注意和spinlock区分开），
+	 * 考虑到我们是尾部节点，next设置为NULL
+	 * */
 	node->locked = 0;
 	node->next = NULL;
 	pv_init_node(node);
@@ -440,6 +492,9 @@ pv_queue:
 	 * attempt the trylock once more in the hope someone let go while we
 	 * weren't watching.
 	 */
+	/* 试图获取锁，很可能在上面的过程中，pending thread和owner thread都已经离开了临界区
+	 * ，这时候如果持锁成功，那么就可以长驱直入，进入临界区，无需排队
+	 * */
 	if (queued_spin_trylock(lock))
 		goto release;
 
@@ -457,6 +512,10 @@ pv_queue:
 	 *
 	 * p,*,* -> n,*,*
 	 */
+	/* 当然，大部分场合下我们还是要入队。这里修改qspinlock的tail域，old保存了旧值。
+	 * 如果这是队列中的第一个节点，那么至此就结束了，如果之前tial域就有值，那么说明
+	 * 有队列中有其他waiter，需要把队列串联起来当前节点才真正挂入队列
+	 * */
 	old = xchg_tail(lock, tail);
 	next = NULL;
 
@@ -464,13 +523,20 @@ pv_queue:
 	 * if there was a previous node; link it and wait until reaching the
 	 * head of the waitqueue.
 	 */
+	/* 如果在本节点挂入队列之前，等待队列中已经有了waiter，那么我们需要把tail
+	 * 指向的尾部节点和旧的MCS队列串联起来
+	 * */
 	if (old & _Q_TAIL_MASK) {
 		prev = decode_tail(old);
 
 		/* Link @node into the waitqueue. */
+		/* 建立新node和旧的等待队列的关系 */
 		WRITE_ONCE(prev->next, node);
 
 		pv_wait_node(node, prev);
+		/* 至此，我们已经是处于mcs queue的队列尾部，自旋在自己的mcs lock上，
+		 * 等待locked状态（是mcs lock，不是spinlock的）变成1
+		 * */
 		arch_mcs_spin_lock_contended(&node->locked);
 
 		/*
@@ -479,6 +545,10 @@ pv_queue:
 		 * the next pointer & prefetch the cacheline for writing
 		 * to reduce latency in the upcoming MCS unlock operation.
 		 */
+		/* 执行至此，我们已经获得了MCS lock，也就是说我们成为了队首。在我们自旋等待的
+		 * 时候，可能其他的竞争者也加入到链表了，next不再是null了（即我们不再是队尾
+		 * 了）。因此这里需要更新next变量，以便我们把mcs锁禅让给下一个node
+		 * */
 		next = READ_ONCE(node->next);
 		if (next)
 			prefetchw(next);
@@ -508,6 +578,9 @@ pv_queue:
 	if ((val = pv_wait_head_or_lock(lock, node)))
 		goto locked;
 
+	/* 在获取了MCS lock之后（排到了mcs node queue的头部），我们获准了在spinlock上自旋
+	 * 。这里等待pending和owner离开临界区
+	 * */
 	val = atomic_cond_read_acquire(&lock->val, !(VAL & _Q_LOCKED_PENDING_MASK));
 
 locked:
@@ -532,6 +605,10 @@ locked:
 	 *       above wait condition, therefore any concurrent setting of
 	 *       PENDING will make the uncontended transition fail.
 	 */
+	/* 至此，我们获取了spinlock，成为万人敬仰的“owner task”，在进入临界区之前，
+	 * 我们需要把mcs锁传给下一个节点。如果本mcs node是队列中的最后一个节点，
+	 * 我们不需要处理mcs lock传递，直接试图持锁，如果成功，完成持锁，进入临界区
+	 * */
 	if ((val & _Q_TAIL_MASK) == tail) {
 		if (atomic_try_cmpxchg_relaxed(&lock->val, &val, _Q_LOCKED_VAL))
 			goto release; /* No contention */
@@ -542,14 +619,20 @@ locked:
 	 * which will then detect the remaining tail and queue behind us
 	 * ensuring we'll see a @next.
 	 */
+	/* 如果本mcs node不是队列尾部，那么不需要考虑竞争，直接持spinlock */
 	set_locked(lock);
 
 	/*
 	 * contended path; wait for next if not observed yet, release.
 	 */
+	/* 如果next为空，说明不存在下一个节点。不过也许在我们等自旋锁的时候，
+	 * 新的节点又挂入了，所以这里重新读一下next节点，为什么这时候next不怕
+	 * 读取到NULL，因为上面的tail已经表明了，我们不是队列尾部了
+	 * */
 	if (!next)
 		next = smp_cond_load_relaxed(&node->next, (VAL));
 
+	/* 把mcs lock传递给下一个节点，让其自旋在spinlock上 */
 	arch_mcs_spin_unlock_contended(&next->locked);
 	pv_kick_node(lock, next);
 

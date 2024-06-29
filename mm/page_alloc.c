@@ -386,6 +386,9 @@ EXPORT_SYMBOL(nr_node_ids);
 EXPORT_SYMBOL(nr_online_nodes);
 #endif
 
+/* 只有当物理内存足够大且每种迁移类型有足够多的物理页面时，根据可移动性
+ * 分组才有意义，这个全局变量表示是否禁用根据可移动性分组
+ * */
 int page_group_by_mobility_disabled __read_mostly;
 
 #ifdef CONFIG_DEFERRED_STRUCT_PAGE_INIT
@@ -3741,8 +3744,9 @@ struct page *rmqueue(struct zone *preferred_zone,
 	unsigned long flags;
 	struct page *page;
 
-	/* pcp是per cpu page的意思，里面暂时存放了一小部分单个的物理页面。当系统需要单个物理页面
-	 *的时候，从本地CPU的per-cpu变量的链表中直接获取物理页面即可，这样效率高，不用zone锁 */
+	/* pcp是per cpu page的意思，里面暂时存放了一小部分单个的物理页面。当系统需要单个物理页
+	 * 面的时候，从本地CPU的per-cpu变量的链表中直接获取物理页面即可，这样效率高，
+	 * 不用zone锁 */
 	if (likely(pcp_allowed_order(order))) {
 		/*
 		 * MIGRATE_MOVABLE pcplist could have the pages on CMA area and
@@ -4239,7 +4243,7 @@ retry:
 				continue;
 
 			/* 从节点回收没有映射到进程虚拟地址空间的文件页和slab分配器申请的页
-			 * 然后重新检查水仙，如果还是不满足，那么不能从这个区域分配页 */
+			 * 然后重新检查水位，如果还是不满足，那么不能从这个区域分配页 */
 			ret = node_reclaim(zone->zone_pgdat, gfp_mask, order);
 			switch (ret) {
 			case NODE_RECLAIM_NOSCAN:

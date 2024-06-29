@@ -489,7 +489,8 @@ static inline bool gfpflags_normal_context(const gfp_t gfp_flags)
 #error GFP_ZONES_SHIFT too large to create GFP_ZONE_TABLE integer
 #endif
 /*
- * GFP_ZONES_SHIFT 区域类型占用的位数，例如有4个区，那么就2bit，GFP_ZONES_SHIFT must be <= 2 on 32 bit platforms
+ * GFP_ZONES_SHIFT 区域类型占用的位数，例如有4个区，那么就2bit
+ * GFP_ZONES_SHIFT must be <= 2 on 32 bit platforms
  * GFP_ZONEMASK 代表4个区的mask，4个区就是4个mask
  */
 #define GFP_ZONE_TABLE ( \

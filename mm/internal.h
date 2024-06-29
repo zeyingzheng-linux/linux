@@ -139,6 +139,7 @@ extern bool cgroup_memory_nokmem;
  */
 struct alloc_context {
 	struct zonelist *zonelist;
+	/* 指定node，如果没有指定，则在所有节点中分配 */
 	nodemask_t *nodemask;
 	struct zoneref *preferred_zoneref;
 	int migratetype;

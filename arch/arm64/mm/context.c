@@ -24,7 +24,13 @@ static DEFINE_RAW_SPINLOCK(cpu_asid_lock);
 static atomic64_t asid_generation;
 static unsigned long *asid_map;
 
+/* 保存处理器正在使用的ASID，即处理器正在执行的进程的ASID
+ * 如果active_asids为0，具有特殊含义，说明全局ASID全局版本
+ * 号码变化了，具体见flush_context */
 static DEFINE_PER_CPU(atomic64_t, active_asids);
+/* 如果ASID分配完了，全局版本号asid_generation会+1，此时
+ * 用reserved_asids保存该处理器正在执行进程的ASID
+ * */
 static DEFINE_PER_CPU(u64, reserved_asids);
 static cpumask_t tlb_flush_pending;
 
@@ -255,6 +261,8 @@ void check_and_switch_context(struct mm_struct *mm)
 	/* generation计数相等，说明没有发生ASID的溢出，换入进程的ASID还依然
          * 属于同一批次。所以可以goto switch_mm_fastpath 进行地址切换，同时
          * 设置新的ASID到per-cpu变量 active_asids 中
+	 * old_active_asid为0，证明版本已经变化过了，第三个返回的旧值也是一
+	 * 个意思那么不为0的话，证明版本没变化，就可以走快速路径
          * */
 	if (old_active_asid && asid_gen_match(asid) &&
 	    atomic64_cmpxchg_relaxed(this_cpu_ptr(&active_asids),

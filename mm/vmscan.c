@@ -1295,7 +1295,8 @@ static enum page_references page_check_references(struct page *page,
 		 */
 		SetPageReferenced(page);
 
-		/* 当页面访问、引用了PTE时，两种情况应该迁移活跃LRU：
+		/* 当页面访问、引用了PTE时，三种情况应该迁移活跃LRU：
+		 * 0. 页面是匿名页面（5.0代码还有这段逻辑）
 		 * 1. 页面位于最近第二次访问的文件缓存或者多人共享的文件缓存中
 		 * 2. 页面位于可执行文件的文件缓存中(非匿名页面)
 		 * 这里的第二次访问的文件缓存是这么理解的:

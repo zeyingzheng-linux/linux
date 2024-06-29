@@ -1247,6 +1247,7 @@ void page_add_new_anon_rmap(struct page *page,
 	/* 增加页面所在的zone的匿名页面的计数，匿名页面计数类型为 NR_ANON_MAPPED */
 	__mod_lruvec_page_state(page, NR_ANON_MAPPED, nr);
 	/* 设置页面为匿名映射页面，即mapping成员 */
+	/* 子进程fork，看dup_mmap  */
 	__page_set_anon_rmap(page, vma, address, 1);
 }
 
@@ -2356,7 +2357,8 @@ static void rmap_walk_anon(struct page *page, struct rmap_walk_control *rwc,
 	pgoff_start = page_to_pgoff(page);
 	pgoff_end = pgoff_start + thp_nr_pages(page) - 1;
 	/* 基本上就是遍历父进程的红黑树即可，因为AVC枢纽在父进程的红黑树中，而它的VMA
-	 * 指向了子进程，它的anon_vma指向了父进程的 */
+	 * 指向了子进程，它的anon_vma指向了父进程的
+	 * 其实就是遍历自己进程的那个红黑树，不一定是父进程的 */
 	anon_vma_interval_tree_foreach(avc, &anon_vma->rb_root,
 			pgoff_start, pgoff_end) {
 		struct vm_area_struct *vma = avc->vma;

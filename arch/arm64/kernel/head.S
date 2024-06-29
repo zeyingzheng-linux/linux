@@ -887,7 +887,7 @@ SYM_FUNC_END(__no_granule_support)
  *	     _text的链接地址，所以以后访问_text就是正确的了
  *	     像kimage_vaddr，就是直接重定位了该内存里面
  *	     的数值了，当然应该也是这段代码干的活
- * 假设我们有这么一条汇编指令，LDR x0, =kimage_vaddr
+ * 假设我们有这么一条汇编指令，LDR x0, kimage_vaddr(LDR x0, =kimage_vaddr)
  * 假设编译出来之后的代码这样，LDR x0, #a0 (a0是和pc之间的offset)
  * 那么我们假设，_text 编译地址是 0x500，上面这条指令在 0x1000，这样内核
  * 会产生一个重定位的entry在 0x10a0，里面就应该存在 _text的编译期间地址
