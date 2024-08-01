@@ -438,6 +438,10 @@ struct vm_area_struct {
 	 * For areas with an address space and backing store,
 	 * linkage into the address_space->i_mmap interval tree.
 	 */
+	/* 为了支持查询一个文件区间被映射到哪些虚拟内存区域，把一个文件映射到的
+	 * 所有虚拟内存区域加入该文件的地址空间结构体 address_space->i_mmap
+	 * 指向的区间树
+	 * */
 	struct {
 		struct rb_node rb;
 		unsigned long rb_subtree_last;
@@ -454,8 +458,14 @@ struct vm_area_struct {
 	 * 2. 页面迁移时，需要断开多有映射到匿名页面的用户PTE
 	 * RMAP的核心函数是 try_to_unmap，它会断开一个页面的所有映射
 	 * */
+	/* 把虚拟内存区域关联的所有 anon_vma实例串联起来。一个虚拟内存区域会
+	 * 关联到父进程的 anon_vma实例和自己的 anon_vma实例
+	 * */
 	struct list_head anon_vma_chain; /* Serialized by mmap_lock &
 					  * page_table_lock */
+	/* 指向一个 anon_vma 实例，结构体 anon_vma用来组织匿名页被映射到的所有
+	 * 虚拟地址空间
+	 * */
 	struct anon_vma *anon_vma;	/* Serialized by page_table_lock */
 
 	/* Function pointers to deal with this struct. */
@@ -471,6 +481,8 @@ struct vm_area_struct {
 	unsigned long vm_pgoff;		/* Offset (within vm_file) in PAGE_SIZE
 					   units */
 	/* 指向file的实例，描述一个被映射的文件 */
+	/* 如果是私有的匿名映射，该成员为NULL（如果是共享的匿名映射，打开/dev/zero
+	 * 一般共享匿名映射会存在于父子进程之间 */
 	struct file * vm_file;		/* File we map to (can be NULL). */
 	void * vm_private_data;		/* was vm_pte (shared mem) */
 
@@ -547,6 +559,7 @@ struct mm_struct {
 		 */
 		/* 记录正在使用该进程地址空间的进程数目，如果两个线程共享该地址空间
 		 * 那么 mm_users 等于2 */
+		/* 被内核线程借用的时候，这个域是不会增加的，但mm_count会增加 */
 		atomic_t mm_users;
 
 		/**

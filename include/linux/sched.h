@@ -904,7 +904,13 @@ struct task_struct {
 	struct rb_node			pushable_dl_tasks;
 #endif
 
+	/* 进程的mm指向一个内存描述符，内核线程没有用户虚拟地址空间
+	 * 所有内核线程的mm是NULL指针 */
 	struct mm_struct		*mm;
+	/* 进程的 active_mm和mm总是指向同一个内存描述符，但对于内核
+	 * 线程来说，它的 active_mm在没有运行的时候是NULL，在运行时
+	 * 指向从上一个进程借用的内存描述符
+	 * */
 	struct mm_struct		*active_mm;
 
 	/* Per-thread vma caching: */

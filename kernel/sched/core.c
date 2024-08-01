@@ -5036,6 +5036,12 @@ context_switch(struct rq *rq, struct task_struct *prev,
 
 	/* Here we just switch the register state and the stack. */
 	/* zzy 思考last参数，思考cpu_context为什么只保存x19-x28就可以 */
+	/* 因为说到底它也就是函数调用而已，跟异常还不同，所以遵守调用
+	 * 规范即可，规范说callee需要保存x19-x28，如果它用到这些寄存器的
+	 * 话，进程切过去，谁知道到底用哪些，所以一股脑都需要保存。
+	 * last返回的起始就是上一个进程，例如A -> B -> C -> A，假设我们
+	 * 这里是A切走的，等A回来的时候，prev就等于C了，x0寄存器用作返回值
+	 * */
 	switch_to(prev, next, prev);
 	barrier();
 

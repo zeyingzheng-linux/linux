@@ -1817,6 +1817,9 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 		 * MAP_FIXED may remove pages of mappings that intersects with
 		 * requested mapping. Account for the pages it would unmap.
 		 */
+		/* 如果是固定映射，调用者强制指定虚拟地址范围，可能和旧的虚拟内存
+		 * 区域重叠，那么需要从旧的虚拟内存区域删除重叠的部分
+		 * */
 		nr_pages = count_vma_pages_range(mm, addr, addr + len);
 
 		if (!may_expand_vm(mm, vm_flags,
@@ -1907,6 +1910,13 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 
 		vm_flags = vma->vm_flags;
 	} else if (vm_flags & VM_SHARED) {
+		/* 如果是共享的匿名映射，那么在内存文件系统tmpfs中创建一个名为/dev/zero
+		 * 的文件，并且创建文件的一个打开实例file，虚拟内存区域的成员vmfile指向
+		 * 这个打开的实例，把虚拟内存操作集合设置为 shmem_vm_ops。如果没有打开
+		 * 配置 CONFIG_SHMEM， shmem_vm_ops 等价于 generic_file_vm_ops
+		 * 其实大多数文件系统都用generic_file_vm_ops，不过ext4用的是
+		 * ext4_filemap_fault
+		 * */
 		error = shmem_zero_setup(vma);
 		if (error)
 			goto free_vma;
@@ -1923,6 +1933,8 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 			goto free_vma;
 	}
 
+	/* 把虚拟内存区域添加到链表和红黑树中，如果虚拟内存区域关联文件，那么把虚拟内存
+	 * 区域添加到文件的区间树中，文件的区间树用来跟踪文件被映射到哪些虚拟内存区域 */
 	vma_link(mm, vma, prev, rb_link, rb_parent);
 	/* Once vma denies write, undo our temporary denial count */
 unmap_writable:
@@ -1958,6 +1970,9 @@ out:
 	 * 设置为只读的，这样可以跟踪写操作的时间， vma_wants_writenotify 做这个操作，
 	 * 在这个场景下，由于文件系统通常会设置 vm_ops->page_mkwrite 回调，因此返回true
 	 * 故而 vma_set_page_prot 会清除VM_SHARED标志位，然后重新冲 protecttion_map取PTE属性*/
+	/* 根据 vma->vm_flags 计算页保护位（vma->vma_page_prot），如果共享的可写映射想要把
+	 * 页标记为只读，目的是跟踪写事件，那么从页保护位删除可写位
+	 * */
 	vma_set_page_prot(vma);
 
 	return addr;
@@ -3449,9 +3464,12 @@ out:
  */
 bool may_expand_vm(struct mm_struct *mm, vm_flags_t flags, unsigned long npages)
 {
+	/* 已经使用的进程地址空间总和 + 申请的页数 是否超过地址空间限制 */
 	if (mm->total_vm + npages > rlimit(RLIMIT_AS) >> PAGE_SHIFT)
 		return false;
 
+	/* 如果是私有的可写映射，且不是栈，那么检查对应已经用掉的地址空间 + 申请
+	 * 的页数是否超过最大数据长度 */
 	if (is_data_mapping(flags) &&
 	    mm->data_vm + npages > rlimit(RLIMIT_DATA) >> PAGE_SHIFT) {
 		/* Workaround for Valgrind */

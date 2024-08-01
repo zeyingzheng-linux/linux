@@ -303,12 +303,15 @@ static __always_inline u32  __pv_wait_head_or_lock(struct qspinlock *lock,
  * uncontended  (0,0,0) -:--> (0,0,1) ------------------------------:--> (*,*,0)
  *                       :       | ^--------.------.             /  :
  *                       :       v           \      \            |  :
+ * spin on lock          :
  * pending               :    (0,1,1) +--> (0,1,0)   \           |  :
  *                       :       | ^--'              |           |  :
  *                       :       v                   |           |  :
+ * spin on pending_lock  :
  * uncontended           :    (n,x,y) +--> (n,0,0) --'           |  :
  *   queue               :       | ^--'                          |  :
  *                       :       v                               |  :
+ * spin on mcs lock      :
  * contended             :    (*,x,y) +--> (*,0,0) ---> (*,0,1) -'  :
  *   queue               :         ^--'                             :
  */

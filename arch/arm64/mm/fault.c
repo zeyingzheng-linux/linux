@@ -496,8 +496,10 @@ static vm_fault_t __do_page_fault(struct mm_struct *mm, unsigned long addr,
 	 * 扩展到addr，如果可以扩展，说明这是一个好的VMA，否则，这是一个由问题的VMA。
 	 * */
 	if (unlikely(vma->vm_start > addr)) {
+		/* 看你是不是栈 */
 		if (!(vma->vm_flags & VM_GROWSDOWN))
 			return VM_FAULT_BADMAP;
+		/* 如果是栈，看是否能扩展成功 */
 		if (expand_stack(vma, addr))
 			return VM_FAULT_BADMAP;
 	}
@@ -526,6 +528,10 @@ static bool is_el0_instruction_abort(unsigned int esr)
  */
 static bool is_write_abort(unsigned int esr)
 {
+	/* WNR: write not read，1表示写，0表示读
+	 * CM: cache maintenance，1表示数据中止是由执行缓存维护指令或地址转换指令生成的
+	 *     0表示数据中止是因其他情况产生的
+	 * */
 	return (esr & ESR_ELx_WNR) && !(esr & ESR_ELx_CM);
 }
 
@@ -550,9 +556,16 @@ static int __kprobes do_page_fault(unsigned long far, unsigned int esr,
 	 * If we're in an interrupt or have no user context, we must not take
 	 * the fault.
 	 */
-	/* 如果缺页异常发生中断上下文或者内核线程中，那么直接跳转到 no_context标签处执行，一般就
+	/* 如果缺页异常发生原子上下文或者内核线程中，那么直接跳转到 no_context标签处执行，一般就
 	 * 是kernel fault了，不用处理与进程地址空间相关的部分。这是因为如果异常发生在中断上下文
 	 * 或者内核线程中，此时处理器在内核态执行，而且处理器正在使用内核空间的虚拟地址。
+	 * */
+	/* 原子上下文：执行硬中断，执行软中断，禁止硬中断，禁止软中断，禁止内核抢占，这五种情况
+	 * 不允许睡眠，成为原子上下文
+	 * */
+	/* pagefault_disable，有些系统调用传入用户空间的缓冲区，内核使用用户虚拟地址访问缓冲区，
+	 * 可能产生页错误异常（可能睡眠），但是内核不想睡眠，在使用用户虚拟地址访问缓冲之前，调
+	 * 用pagefault_disable，禁止执行页错误异常处理程序。
 	 * */
 	if (faulthandler_disabled() || !mm)
 		goto no_context;
@@ -591,6 +604,7 @@ static int __kprobes do_page_fault(unsigned long far, unsigned int esr,
 	 * 判断访问权限问题是否发生在EL1中。当这两个条件都满足时，说明这是一个
 	 * 比较少见的特殊情况
 	 * */
+	/* 进程在内核模式下访问用户虚拟地址的时候，因为访问权限而触发异常的情况 */
 	if (is_ttbr0_addr(addr) && is_el1_permission_fault(addr, esr, regs)) {
 		/* 确认是EL1的指令异常 */
 		if (is_el1_instruction_abort(esr))
@@ -622,6 +636,8 @@ static int __kprobes do_page_fault(unsigned long far, unsigned int esr,
 		 * (见异常表)。因此，当发生在内核空间并且在异常表没有查询到该地址时，就跳转
 		 * no_context标签处执行，就 kernel_fault。
 		 * */
+		/* 如果是内核模式下生成的异常，并且根据触发异常的指令的虚拟地址在异常表没有找到
+		 * 表项，那么跳转 no_context，调用 __do_kernel_fault */
 		if (!user_mode(regs) && !search_exception_tables(regs->pc))
 			goto no_context;
 retry:
